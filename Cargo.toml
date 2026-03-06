@@ -1,0 +1,25 @@
+[package]
+name = "tg"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "tg"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli", "non-blocking"]
+cli = ["dep:clap", "dep:pretty_env_logger"]
+non-blocking = []
+
+[dependencies]
+teloxide = { version = "0.17.0", features = ["macros"] }
+tokio = { version = "1.8", features = ["rt-multi-thread", "macros", "sync"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"], optional = true }
+pretty_env_logger = { version = "0.5", optional = true }
