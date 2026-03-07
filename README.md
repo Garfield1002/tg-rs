@@ -4,12 +4,10 @@
 
 Send yourself Telegram messages from the command line.
 
-
 ```sh
 tg "Hello, World!"
 echo "Hello, World!" | tg
 ```
-
 
 ## Install
 
@@ -207,7 +205,7 @@ tg -m html "<b>ALERT</b>"
 The crate exports a `telegram!` macro for quick fire-and-forget sends in Rust code:
 
 ```rust
-use tg::telegram;
+use tg_cli::telegram;
 
 #[tokio::main]
 async fn main() {
@@ -229,7 +227,7 @@ Notes:
 If you want a synchronous API, call `send_tg_message_blocking(...)`:
 
 ```rust
-use tg::{ParseMode, send_tg_message_blocking};
+use tg_cli::{ParseMode, send_tg_message_blocking};
 
 fn main() {
     if let Err(err) = send_tg_message_blocking("hello".to_string(), ParseMode::Markdown, false) {
@@ -274,4 +272,3 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to <https://unlicense.org/>
-

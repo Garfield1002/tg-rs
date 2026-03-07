@@ -11,7 +11,7 @@ use teloxide::{
     prelude::Requester,
     types::{ChatId, UpdateKind},
 };
-use tg::{ParseMode, TgSession, send_tg_message};
+use tg_cli::{ParseMode, TgSession, send_tg_message};
 
 use crate::config::{Config, config_path};
 
@@ -178,10 +178,12 @@ async fn run_messgae(cli: Cli) {
     }
 }
 
-async fn run_listen() -> Result<(), tg::SendMessageError> {
+async fn run_listen() -> Result<(), tg_cli::SendMessageError> {
     let config = Config::load();
-    let token = config.token.ok_or(tg::SendMessageError::MissingToken)?;
-    let chat_id = config.chat_id.ok_or(tg::SendMessageError::MissingChatId)?;
+    let token = config.token.ok_or(tg_cli::SendMessageError::MissingToken)?;
+    let chat_id = config
+        .chat_id
+        .ok_or(tg_cli::SendMessageError::MissingChatId)?;
 
     let bot = Bot::new(token);
     let target_chat = ChatId(chat_id);
@@ -193,7 +195,7 @@ async fn run_listen() -> Result<(), tg::SendMessageError> {
             .map(|u| i32::try_from(u.id.0).unwrap_or(i32::MAX).saturating_add(1))
             .max()
             .unwrap_or(0),
-        Err(err) => return Err(tg::SendMessageError::Request(err)),
+        Err(err) => return Err(tg_cli::SendMessageError::Request(err)),
     };
 
     loop {
@@ -202,7 +204,7 @@ async fn run_listen() -> Result<(), tg::SendMessageError> {
             .offset(offset)
             .timeout(30)
             .await
-            .map_err(tg::SendMessageError::Request)?;
+            .map_err(tg_cli::SendMessageError::Request)?;
 
         for update in updates {
             offset = i32::try_from(update.id.0)
@@ -247,7 +249,7 @@ async fn push_update(
     text: String,
     parse_mode: ParseMode,
     silent: bool,
-) -> Result<(), tg::SendMessageError> {
+) -> Result<(), tg_cli::SendMessageError> {
     if text.is_empty() {
         return Ok(());
     }
@@ -261,7 +263,7 @@ async fn push_update(
     }
 }
 
-async fn run_interactive(cli: Cli) -> Result<(), tg::SendMessageError> {
+async fn run_interactive(cli: Cli) -> Result<(), tg_cli::SendMessageError> {
     let parse_mode = parse_mode_from_cli(&cli.parse_mode);
     let session = TgSession::from_config()?;
     let mut message_id: Option<i32> = None;
