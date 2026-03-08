@@ -2,9 +2,9 @@ use std::io::{self};
 
 use teloxide::{
     Bot, RequestError,
-    payloads::{EditMessageTextSetters, SendMessageSetters},
+    payloads::{EditMessageTextSetters, SendDocumentSetters, SendMessageSetters},
     prelude::Requester,
-    types::{ChatId, MessageId, ParseMode as TeloxideParseMode},
+    types::{ChatId, InputFile, MessageId, ParseMode as TeloxideParseMode},
 };
 
 use crate::config::Config;
@@ -119,6 +119,18 @@ impl TgSession {
 
         let message = req.await.map_err(SendMessageError::Request)?;
         Ok(message.id.0)
+    }
+
+    pub async fn send_document(&self, path: &std::path::Path, silent: bool) -> TgResult<()> {
+        let input_file = InputFile::file(path);
+        let mut req = self.bot.send_document(self.chat_id, input_file);
+
+        if silent {
+            req = req.disable_notification(true);
+        }
+
+        req.await.map_err(SendMessageError::Request)?;
+        Ok(())
     }
 
     pub async fn edit_message(

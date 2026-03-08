@@ -12,6 +12,7 @@ use teloxide::{
     types::{ChatId, UpdateKind},
 };
 use tg_cli::{ParseMode, TgSession, send_tg_message};
+use std::path::PathBuf;
 
 use crate::config::{Config, config_path};
 
@@ -75,8 +76,25 @@ enum Command {
     Setup,
     /// Listen for incoming Telegram messages and print them to stdout (stop with /eof)
     Listen,
+    /// Send files as Telegram document attachments
+    Attach(AttachArgs),
     /// Manage configuration
     Config(ConfigArgs),
+}
+
+#[derive(Args)]
+struct AttachArgs {
+    /// Files to attach
+    #[arg(required = true)]
+    files: Vec<PathBuf>,
+
+    /// Send silently (no device notification)
+    #[arg(short = 's', long)]
+    silent: bool,
+
+    /// Suppress non-error output
+    #[arg(short = 'q', long)]
+    quiet: bool,
 }
 
 #[derive(Args)]
@@ -127,6 +145,12 @@ async fn main() {
         Some(Command::Setup) => run_setup().await,
         Some(Command::Listen) => {
             if let Err(err) = run_listen().await {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
+        }
+        Some(Command::Attach(args)) => {
+            if let Err(err) = run_attach(args).await {
                 eprintln!("{}", err);
                 std::process::exit(1);
             }
@@ -315,6 +339,25 @@ async fn run_interactive(cli: Cli) -> Result<(), tg_cli::SendMessageError> {
 
     if let Some(text) = pending {
         push_update(&session, &mut message_id, text, parse_mode, cli.silent).await?;
+    }
+
+    Ok(())
+}
+
+async fn run_attach(args: AttachArgs) -> Result<(), tg_cli::SendMessageError> {
+    let session = TgSession::from_config()?;
+
+    for path in &args.files {
+        if !path.exists() {
+            eprintln!("File not found: {}", path.display());
+            std::process::exit(1);
+        }
+
+        session.send_document(path, args.silent).await?;
+
+        if !args.quiet {
+            eprintln!("Sent: {}", path.display());
+        }
     }
 
     Ok(())

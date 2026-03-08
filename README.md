@@ -128,6 +128,24 @@ for i in $(seq 0 20); do
 done | tg -i
 ```
 
+### Attach files (`tg attach`)
+
+Send one or more files as Telegram document attachments. Shell globbing works as expected.
+
+```sh
+# Single file
+tg attach report.pdf
+
+# Multiple files
+tg attach foo.txt bar.c
+
+# Glob pattern
+tg attach *.log
+
+# Silent attachment
+tg attach -s backup.tar.gz
+```
+
 ### Listen mode (`tg listen`)
 
 Listen for new incoming messages in the configured chat and write them to stdout. Listening stops when `/eof` is received.
@@ -152,6 +170,16 @@ Listen for new incoming messages in the configured chat and write them to stdout
 
 ```sh
 tg listen > out.txt
+```
+
+### `tg attach`
+
+Send files as document attachments. Accepts one or more file paths; shell globbing is handled by the shell before `tg` sees the arguments.
+
+```sh
+tg attach *.png
+tg attach -s large-file.zip   # silent
+tg attach -q data.csv         # quiet (no "Sent:" output)
 ```
 
 ### `tg config show`
