@@ -19,6 +19,7 @@ use crate::config::{Config, config_path};
 use crate::setup::run_setup;
 
 mod config;
+mod secret_store;
 mod setup;
 
 #[derive(Parser)]
@@ -204,7 +205,9 @@ async fn run_messgae(cli: Cli) {
 
 async fn run_listen() -> Result<(), tg_cli::SendMessageError> {
     let config = Config::load();
-    let token = config.token.ok_or(tg_cli::SendMessageError::MissingToken)?;
+    let token = config
+        .resolved_token()
+        .ok_or(tg_cli::SendMessageError::MissingToken)?;
     let chat_id = config
         .chat_id
         .ok_or(tg_cli::SendMessageError::MissingChatId)?;

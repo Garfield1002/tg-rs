@@ -72,7 +72,7 @@ impl From<ParseMode> for TeloxideParseMode {
 impl TgSession {
     pub fn from_config() -> TgResult<Self> {
         let config = Config::load();
-        let token = config.token.ok_or(SendMessageError::MissingToken)?;
+        let token = config.resolved_token().ok_or(SendMessageError::MissingToken)?;
         let chat_id = config.chat_id.ok_or(SendMessageError::MissingChatId)?;
 
         Ok(Self {

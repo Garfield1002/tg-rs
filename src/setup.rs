@@ -20,12 +20,14 @@ pub(crate) async fn run_setup() {
     }
 
     eprintln!("Step 1 of 3 — Bot token\n\n");
-    if config.token.is_none() {
-        let token = prompt_token();
-        config.token = Some(token);
-    } else {
+    let token = if let Some(token) = config.resolved_token() {
         eprintln!("Bot token already configured. Run `tg config reset` to reconfigure.");
-    }
+        token
+    } else {
+        let token = prompt_token();
+        config.token = Some(token.clone());
+        token
+    };
 
     let code = pairing_code();
 
@@ -35,7 +37,7 @@ pub(crate) async fn run_setup() {
          Open your bot in Telegram and send it /start.\n\
          Waiting..."
     );
-    let chat_id = retrieve_chat_id(&config, &code).await;
+    let chat_id = retrieve_chat_id(&token, &code).await;
 
     eprintln!("\nStep 3 of 3 — Confirm pairing\n\n");
     verify_code(&code).await;
@@ -68,11 +70,11 @@ fn prompt_token() -> String {
 }
 
 /// Retrieve a chat ID, this needs to be done in a seperate thread since we need to wait for the user to send a message to the bot in Telegram
-async fn retrieve_chat_id(config: &Config, code: &str) -> i64 {
+async fn retrieve_chat_id(token: &str, code: &str) -> i64 {
     let (tx, rx) = tokio::sync::oneshot::channel::<ChatId>();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
-    let bot = Bot::new(config.token.as_deref().unwrap());
+    let bot = Bot::new(token);
 
     let code_for_repl = code.to_string();
     tokio::spawn(async move {
