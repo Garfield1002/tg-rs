@@ -10,6 +10,13 @@ pub(crate) struct Config {
     pub(crate) chat_id: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum TokenPersistence {
+    SecretService,
+    PlaintextFallback,
+}
+
 // The path to the config file, e.g. ~/.config/tg/config.toml
 pub(crate) fn config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -41,6 +48,18 @@ impl Config {
         let path = config_path();
         self.resolved_token_with(
             secret_store::load_token,
+            |message| eprintln!("{message}"),
+            &path,
+        )
+    }
+
+    /// Save token to Secret Service first, then fallback to plaintext config on failure.
+    #[allow(dead_code)]
+    pub(crate) fn persist_token(&mut self, token: &str) -> TokenPersistence {
+        let path = config_path();
+        self.persist_token_with(
+            token,
+            secret_store::save_token,
             |message| eprintln!("{message}"),
             &path,
         )
@@ -84,6 +103,41 @@ impl Config {
             }
         }
     }
+
+    fn persist_token_with<F, W>(
+        &mut self,
+        token: &str,
+        save_secret: F,
+        mut warn: W,
+        config_path: &std::path::Path,
+    ) -> TokenPersistence
+    where
+        F: FnOnce(&str) -> Result<(), secret_store::SecretStoreError>,
+        W: FnMut(String),
+    {
+        match save_secret(token) {
+            Ok(()) => {
+                self.token = None;
+                TokenPersistence::SecretService
+            }
+            Err(err) if secret_store::is_unavailable(&err) => {
+                warn(format!(
+                    "Warning: Secret Service API unavailable; falling back to plaintext token in {}",
+                    config_path.display()
+                ));
+                self.token = Some(token.to_string());
+                TokenPersistence::PlaintextFallback
+            }
+            Err(err) => {
+                warn(format!(
+                    "Warning: failed to store token in Secret Service ({err}); falling back to plaintext token in {}",
+                    config_path.display()
+                ));
+                self.token = Some(token.to_string());
+                TokenPersistence::PlaintextFallback
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -95,7 +149,7 @@ mod tests {
 
     use crate::secret_store::SecretStoreError;
 
-    use super::Config;
+    use super::{Config, TokenPersistence};
 
     #[test]
     fn load_from_path_returns_default_when_missing() {
@@ -197,6 +251,65 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(
             warnings[0].contains("failed to read token from Secret Service")
+                && warnings[0].contains("/home/test/.config/tg/config.toml")
+        );
+    }
+
+    #[test]
+    fn persist_token_uses_secret_service_when_available() {
+        let mut config = Config::default();
+        let mut warnings = Vec::<String>::new();
+
+        let persistence = config.persist_token_with(
+            "secret-service-token",
+            |_| Ok(()),
+            |warning| warnings.push(warning),
+            Path::new("/home/test/.config/tg/config.toml"),
+        );
+
+        assert_eq!(persistence, TokenPersistence::SecretService);
+        assert!(config.token.is_none());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn persist_token_warns_and_falls_back_when_secret_service_unavailable() {
+        let mut config = Config::default();
+        let mut warnings = Vec::<String>::new();
+
+        let persistence = config.persist_token_with(
+            "plaintext-token",
+            |_| Err(SecretStoreError::Unavailable("dbus unavailable".to_string())),
+            |warning| warnings.push(warning),
+            Path::new("/home/test/.config/tg/config.toml"),
+        );
+
+        assert_eq!(persistence, TokenPersistence::PlaintextFallback);
+        assert_eq!(config.token.as_deref(), Some("plaintext-token"));
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("Secret Service API unavailable")
+                && warnings[0].contains("/home/test/.config/tg/config.toml")
+        );
+    }
+
+    #[test]
+    fn persist_token_warns_and_falls_back_on_other_secret_errors() {
+        let mut config = Config::default();
+        let mut warnings = Vec::<String>::new();
+
+        let persistence = config.persist_token_with(
+            "plaintext-token",
+            |_| Err(SecretStoreError::Backend(keyring::Error::NoEntry)),
+            |warning| warnings.push(warning),
+            Path::new("/home/test/.config/tg/config.toml"),
+        );
+
+        assert_eq!(persistence, TokenPersistence::PlaintextFallback);
+        assert_eq!(config.token.as_deref(), Some("plaintext-token"));
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("failed to store token in Secret Service")
                 && warnings[0].contains("/home/test/.config/tg/config.toml")
         );
     }

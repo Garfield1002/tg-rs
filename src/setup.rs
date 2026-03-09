@@ -25,7 +25,7 @@ pub(crate) async fn run_setup() {
         token
     } else {
         let token = prompt_token();
-        config.token = Some(token.clone());
+        let _ = config.persist_token(&token);
         token
     };
 

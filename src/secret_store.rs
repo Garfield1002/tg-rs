@@ -44,6 +44,7 @@ pub(crate) fn load_token() -> Result<Option<String>, SecretStoreError> {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
     let entry = token_entry()?;
 
