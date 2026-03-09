@@ -59,7 +59,14 @@ pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
 pub(crate) fn delete_token() -> Result<(), SecretStoreError> {
     let entry = token_entry()?;
 
-    match entry.delete_credential() {
+    match map_delete_result(entry.delete_credential()) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn map_delete_result(result: Result<(), keyring::Error>) -> Result<(), SecretStoreError> {
+    match result {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(err) if backend_unavailable(&err) => Err(SecretStoreError::Unavailable(err.to_string())),
@@ -104,7 +111,7 @@ fn backend_unavailable(err: &keyring::Error) -> bool {
 mod tests {
     use std::io;
 
-    use super::{SecretStoreError, backend_unavailable, is_unavailable};
+    use super::{SecretStoreError, backend_unavailable, is_unavailable, map_delete_result};
 
     #[test]
     fn marks_no_storage_access_as_unavailable() {
@@ -142,5 +149,27 @@ mod tests {
 
         assert!(is_unavailable(&unavailable));
         assert!(!is_unavailable(&backend));
+    }
+
+    #[test]
+    fn delete_mapping_treats_no_entry_as_success() {
+        assert!(map_delete_result(Err(keyring::Error::NoEntry)).is_ok());
+    }
+
+    #[test]
+    fn delete_mapping_marks_storage_access_errors_as_unavailable() {
+        let result = map_delete_result(Err(keyring::Error::NoStorageAccess(Box::new(
+            io::Error::other("permission denied"),
+        ))));
+        assert!(matches!(result, Err(SecretStoreError::Unavailable(_))));
+    }
+
+    #[test]
+    fn delete_mapping_preserves_non_unavailable_backend_errors() {
+        let result = map_delete_result(Err(keyring::Error::Invalid(
+            "service".to_string(),
+            "bad entry".to_string(),
+        )));
+        assert!(matches!(result, Err(SecretStoreError::Backend(_))));
     }
 }
