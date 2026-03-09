@@ -26,6 +26,6 @@ teloxide = { version = "0.17.0", features = ["macros"] }
 tokio = { version = "1.8", features = ["rt-multi-thread", "macros", "sync"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-keyring = "3"
+keyring = { version = "3", features = ["async-secret-service", "tokio", "crypto-rust"] }
 clap = { version = "4", features = ["derive"], optional = true }
 pretty_env_logger = { version = "0.5", optional = true }
