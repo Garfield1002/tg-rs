@@ -10,6 +10,7 @@ use teloxide::{
 use crate::config::Config;
 
 pub(crate) mod config;
+pub(crate) mod secret_store;
 
 #[derive(Debug)]
 pub enum SendMessageError {
