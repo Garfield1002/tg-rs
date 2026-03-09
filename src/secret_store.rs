@@ -55,6 +55,18 @@ pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn delete_token() -> Result<(), SecretStoreError> {
+    let entry = token_entry()?;
+
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(err) if backend_unavailable(&err) => Err(SecretStoreError::Unavailable(err.to_string())),
+        Err(err) => Err(SecretStoreError::Backend(err)),
+    }
+}
+
 pub(crate) fn is_unavailable(err: &SecretStoreError) -> bool {
     matches!(err, SecretStoreError::Unavailable(_))
 }

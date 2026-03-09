@@ -370,21 +370,85 @@ fn run_config(action: ConfigAction) {
     match action {
         ConfigAction::Show => {
             let path = config_path();
+            let config = Config::load();
+
             println!("Config path: {}", path.display());
-            if path.exists() {
-                let contents = fs::read_to_string(&path).unwrap_or_default();
-                print!("{}", contents);
-            } else {
-                println!("(no config file found)");
+            println!("Config file: {}", if path.exists() { "present" } else { "missing" });
+            println!(
+                "Chat ID: {}",
+                match config.chat_id {
+                    Some(chat_id) => chat_id.to_string(),
+                    None => "not configured".to_string(),
+                }
+            );
+
+            match secret_store::load_token() {
+                Ok(Some(_)) => {
+                    println!("Secret Service: available");
+                    println!("Token: configured (Secret Service)");
+                }
+                Ok(None) => {
+                    println!("Secret Service: available");
+                    println!(
+                        "Token: {}",
+                        if config.token.is_some() {
+                            "configured (plaintext fallback)"
+                        } else {
+                            "not configured"
+                        }
+                    );
+                }
+                Err(err) if secret_store::is_unavailable(&err) => {
+                    println!("Secret Service: unavailable");
+                    println!(
+                        "Token: {}",
+                        if config.token.is_some() {
+                            "configured (plaintext fallback)"
+                        } else {
+                            "not configured"
+                        }
+                    );
+                }
+                Err(err) => {
+                    println!("Secret Service: error ({err})");
+                    println!(
+                        "Token: {}",
+                        if config.token.is_some() {
+                            "configured (plaintext fallback)"
+                        } else {
+                            "not configured"
+                        }
+                    );
+                }
             }
         }
         ConfigAction::Reset => {
             let path = config_path();
+            let mut removed_any = false;
+
             if path.exists() {
                 fs::remove_file(&path).expect("failed to delete config");
-                println!("Config deleted. Run `tg setup` to reconfigure.");
+                removed_any = true;
+            }
+
+            match secret_store::delete_token() {
+                Ok(()) => {
+                    removed_any = true;
+                }
+                Err(err) if secret_store::is_unavailable(&err) => {
+                    eprintln!(
+                        "Warning: Secret Service API unavailable; could not delete keyring token ({err})."
+                    );
+                }
+                Err(err) => {
+                    eprintln!("Warning: failed to delete keyring token ({err}).");
+                }
+            }
+
+            if removed_any {
+                println!("Configuration deleted. Run `tg setup` to reconfigure.");
             } else {
-                println!("No config file found.");
+                println!("No configuration found.");
             }
         }
     }
