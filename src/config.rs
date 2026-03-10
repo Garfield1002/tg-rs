@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::secret_store;
 
 #[derive(Serialize, Deserialize, Default)]
-pub struct Config {
-    pub token: Option<String>,
-    pub chat_id: Option<i64>,
+pub(crate) struct Config {
+    pub(crate) token: Option<String>,
+    pub(crate) chat_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub(crate) enum TokenPersistence {
 }
 
 // The path to the config file, e.g. ~/.config/tg/config.toml
-pub fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
         .join(".config")
@@ -28,7 +28,7 @@ pub fn config_path() -> PathBuf {
 
 impl Config {
     // Reads a config from the config file, or returns an empty config if the file doesn't exist.
-    pub fn load() -> Self {
+    pub(crate) fn load() -> Self {
         Self::load_from_path(&config_path())
     }
 
@@ -43,7 +43,7 @@ impl Config {
     }
 
     /// Resolve the token from Secret Service first, then fallback to plaintext config.
-    pub fn resolved_token(&self) -> Option<String> {
+    pub(crate) fn resolved_token(&self) -> Option<String> {
         let path = config_path();
         self.resolved_token_with(
             secret_store::load_token,

@@ -1,6 +1,7 @@
 use std::{
     fs,
     io::{self},
+    path::PathBuf,
 };
 
 use teloxide::{
@@ -12,8 +13,8 @@ use teloxide::{
 
 use crate::config::Config;
 
-pub mod config;
-pub mod secret_store;
+mod config;
+mod secret_store;
 
 #[derive(Debug)]
 pub enum SendMessageError {
@@ -51,6 +52,31 @@ impl std::error::Error for SendMessageError {
 }
 
 pub type TgResult<T> = Result<T, SendMessageError>;
+
+pub struct SetupState {
+    pub token: Option<String>,
+    pub chat_id: Option<i64>,
+}
+
+pub struct BotConfigStatus {
+    pub path: PathBuf,
+    pub config_file_present: bool,
+    pub chat_id: Option<i64>,
+    pub token: TokenStatus,
+    pub secret_service: SecretServiceStatus,
+}
+
+pub enum TokenStatus {
+    SecretService,
+    PlaintextFallback,
+    NotConfigured,
+}
+
+pub enum SecretServiceStatus {
+    Available,
+    Unavailable,
+    Error(String),
+}
 
 pub struct TgSession {
     bot: Bot,
@@ -158,6 +184,55 @@ pub async fn send_tg_message(text: String, parse_mode: ParseMode, silent: bool) 
     let session = TgSession::from_config()?;
     session.send_message(text, parse_mode, silent).await?;
     Ok(())
+}
+
+pub fn load_setup_state() -> SetupState {
+    let config = Config::load();
+    SetupState {
+        token: config.resolved_token(),
+        chat_id: config.chat_id,
+    }
+}
+
+pub fn inspect_bot_config() -> BotConfigStatus {
+    let path = config::config_path();
+    let config = Config::load();
+
+    let (secret_service, token) = match secret_store::load_token() {
+        Ok(Some(_)) => (SecretServiceStatus::Available, TokenStatus::SecretService),
+        Ok(None) => (
+            SecretServiceStatus::Available,
+            if config.token.is_some() {
+                TokenStatus::PlaintextFallback
+            } else {
+                TokenStatus::NotConfigured
+            },
+        ),
+        Err(err) if secret_store::is_unavailable(&err) => (
+            SecretServiceStatus::Unavailable,
+            if config.token.is_some() {
+                TokenStatus::PlaintextFallback
+            } else {
+                TokenStatus::NotConfigured
+            },
+        ),
+        Err(err) => (
+            SecretServiceStatus::Error(err.to_string()),
+            if config.token.is_some() {
+                TokenStatus::PlaintextFallback
+            } else {
+                TokenStatus::NotConfigured
+            },
+        ),
+    };
+
+    BotConfigStatus {
+        config_file_present: path.exists(),
+        path,
+        chat_id: config.chat_id,
+        token,
+        secret_service,
+    }
 }
 
 pub fn save_bot_config(token: &str, chat_id: i64) {

@@ -8,11 +8,11 @@ use teloxide::{
     types::{ChatId, Message},
 };
 
-use tg_cli::{config::Config, save_bot_config};
+use tg_cli::{load_setup_state, save_bot_config};
 
 /// Setup wizard for first-time users
 pub(crate) async fn run_setup() {
-    let config = Config::load();
+    let config = load_setup_state();
 
     if config.chat_id.is_some() {
         eprintln!("Already configured. Run `tg config reset` to reconfigure.");
@@ -20,7 +20,7 @@ pub(crate) async fn run_setup() {
     }
 
     eprintln!("Step 1 of 3 — Bot token\n\n");
-    let token = if let Some(token) = config.resolved_token() {
+    let token = if let Some(token) = config.token {
         eprintln!("Bot token already configured. Run `tg config reset` to reconfigure.");
         token
     } else {

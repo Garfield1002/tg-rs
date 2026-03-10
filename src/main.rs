@@ -11,8 +11,8 @@ use teloxide::{
     types::{ChatId, UpdateKind},
 };
 use tg_cli::{
-    ParseMode, TgSession, config::{Config, config_path}, delete_bot_config, secret_store,
-    send_tg_message,
+    BotConfigStatus, ParseMode, SecretServiceStatus, TgSession, TokenStatus, delete_bot_config,
+    inspect_bot_config, load_setup_state, send_tg_message,
 };
 use std::path::PathBuf;
 
@@ -202,13 +202,9 @@ async fn run_messgae(cli: Cli) {
 }
 
 async fn run_listen() -> Result<(), tg_cli::SendMessageError> {
-    let config = Config::load();
-    let token = config
-        .resolved_token()
-        .ok_or(tg_cli::SendMessageError::MissingToken)?;
-    let chat_id = config
-        .chat_id
-        .ok_or(tg_cli::SendMessageError::MissingChatId)?;
+    let config = load_setup_state();
+    let token = config.token.ok_or(tg_cli::SendMessageError::MissingToken)?;
+    let chat_id = config.chat_id.ok_or(tg_cli::SendMessageError::MissingChatId)?;
 
     let bot = Bot::new(token);
     let target_chat = ChatId(chat_id);
@@ -367,58 +363,26 @@ async fn run_attach(args: AttachArgs) -> Result<(), tg_cli::SendMessageError> {
 fn run_config(action: ConfigAction) {
     match action {
         ConfigAction::Show => {
-            let path = config_path();
-            let config = Config::load();
+            let status = inspect_bot_config();
 
-            println!("Config path: {}", path.display());
-            println!("Config file: {}", if path.exists() { "present" } else { "missing" });
+            println!("Config path: {}", status.path.display());
+            println!(
+                "Config file: {}",
+                if status.config_file_present {
+                    "present"
+                } else {
+                    "missing"
+                }
+            );
             println!(
                 "Chat ID: {}",
-                match config.chat_id {
+                match status.chat_id {
                     Some(chat_id) => chat_id.to_string(),
                     None => "not configured".to_string(),
                 }
             );
 
-            match secret_store::load_token() {
-                Ok(Some(_)) => {
-                    println!("Secret Service: available");
-                    println!("Token: configured (Secret Service)");
-                }
-                Ok(None) => {
-                    println!("Secret Service: available");
-                    println!(
-                        "Token: {}",
-                        if config.token.is_some() {
-                            "configured (plaintext fallback)"
-                        } else {
-                            "not configured"
-                        }
-                    );
-                }
-                Err(err) if secret_store::is_unavailable(&err) => {
-                    println!("Secret Service: unavailable");
-                    println!(
-                        "Token: {}",
-                        if config.token.is_some() {
-                            "configured (plaintext fallback)"
-                        } else {
-                            "not configured"
-                        }
-                    );
-                }
-                Err(err) => {
-                    println!("Secret Service: error ({err})");
-                    println!(
-                        "Token: {}",
-                        if config.token.is_some() {
-                            "configured (plaintext fallback)"
-                        } else {
-                            "not configured"
-                        }
-                    );
-                }
-            }
+            print_config_status(status);
         }
         ConfigAction::Reset => {
             let removed_any = delete_bot_config();
@@ -429,4 +393,19 @@ fn run_config(action: ConfigAction) {
             }
         }
     }
+}
+
+fn print_config_status(status: BotConfigStatus) {
+    match status.secret_service {
+        SecretServiceStatus::Available => println!("Secret Service: available"),
+        SecretServiceStatus::Unavailable => println!("Secret Service: unavailable"),
+        SecretServiceStatus::Error(err) => println!("Secret Service: error ({err})"),
+    }
+
+    let token = match status.token {
+        TokenStatus::SecretService => "configured (Secret Service)",
+        TokenStatus::PlaintextFallback => "configured (plaintext fallback)",
+        TokenStatus::NotConfigured => "not configured",
+    };
+    println!("Token: {token}");
 }
