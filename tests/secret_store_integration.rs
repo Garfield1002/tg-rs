@@ -11,23 +11,22 @@ mod secret_store;
 static BUILDER_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
-fn mock_store_is_supported_for_secret_store_calls() {
+fn mock_store_is_treated_as_unavailable() {
     let _guard = BUILDER_LOCK.lock().expect("builder lock poisoned");
     set_default_credential_builder(mock::default_credential_builder());
 
-    assert_eq!(
-        secret_store::load_token().expect("load should succeed"),
-        None
-    );
-    secret_store::save_token("abc123").expect("save should succeed with mock store");
-
-    // keyring's mock builder is EntryOnly: each call gets a fresh credential.
-    assert_eq!(
-        secret_store::load_token().expect("load should succeed"),
-        None
-    );
-
-    secret_store::delete_token().expect("delete should be treated as success");
+    assert!(matches!(
+        secret_store::load_token(),
+        Err(secret_store::SecretStoreError::Unavailable(_))
+    ));
+    assert!(matches!(
+        secret_store::save_token("abc123"),
+        Err(secret_store::SecretStoreError::Unavailable(_))
+    ));
+    assert!(matches!(
+        secret_store::delete_token(),
+        Err(secret_store::SecretStoreError::Unavailable(_))
+    ));
 }
 
 #[test]

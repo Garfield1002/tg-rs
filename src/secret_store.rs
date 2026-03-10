@@ -44,6 +44,7 @@ pub(crate) fn delete_token() -> Result<(), SecretStoreError> {
 
 fn load_token_impl() -> Result<Option<String>, SecretStoreError> {
     let entry = token_entry()?;
+    ensure_non_mock_backend(&entry)?;
 
     match entry.get_password() {
         Ok(token) => {
@@ -61,6 +62,7 @@ fn load_token_impl() -> Result<Option<String>, SecretStoreError> {
 
 fn save_token_impl(token: &str) -> Result<(), SecretStoreError> {
     let entry = token_entry()?;
+    ensure_non_mock_backend(&entry)?;
 
     match entry.set_password(token) {
         Ok(()) => Ok(()),
@@ -71,6 +73,7 @@ fn save_token_impl(token: &str) -> Result<(), SecretStoreError> {
 
 fn delete_token_impl() -> Result<(), SecretStoreError> {
     let entry = token_entry()?;
+    ensure_non_mock_backend(&entry)?;
 
     match map_delete_result(entry.delete_credential()) {
         Ok(()) => Ok(()),
@@ -102,6 +105,20 @@ where
     }
 
     operation()
+}
+
+fn ensure_non_mock_backend(entry: &Entry) -> Result<(), SecretStoreError> {
+    if entry
+        .get_credential()
+        .downcast_ref::<keyring::mock::MockCredential>()
+        .is_some()
+    {
+        return Err(SecretStoreError::Unavailable(
+            "secure keyring backend unavailable (keyring is using a non-persistent mock backend)"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn is_unavailable(err: &SecretStoreError) -> bool {
