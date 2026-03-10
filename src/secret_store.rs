@@ -28,6 +28,21 @@ impl std::error::Error for SecretStoreError {
 }
 
 pub(crate) fn load_token() -> Result<Option<String>, SecretStoreError> {
+    run_outside_tokio(load_token_impl)
+}
+
+#[allow(dead_code)]
+pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
+    let token = token.to_string();
+    run_outside_tokio(move || save_token_impl(&token))
+}
+
+#[allow(dead_code)]
+pub(crate) fn delete_token() -> Result<(), SecretStoreError> {
+    run_outside_tokio(delete_token_impl)
+}
+
+fn load_token_impl() -> Result<Option<String>, SecretStoreError> {
     let entry = token_entry()?;
 
     match entry.get_password() {
@@ -44,8 +59,7 @@ pub(crate) fn load_token() -> Result<Option<String>, SecretStoreError> {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
+fn save_token_impl(token: &str) -> Result<(), SecretStoreError> {
     let entry = token_entry()?;
 
     match entry.set_password(token) {
@@ -55,8 +69,7 @@ pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn delete_token() -> Result<(), SecretStoreError> {
+fn delete_token_impl() -> Result<(), SecretStoreError> {
     let entry = token_entry()?;
 
     match map_delete_result(entry.delete_credential()) {
@@ -72,6 +85,23 @@ fn map_delete_result(result: Result<(), keyring::Error>) -> Result<(), SecretSto
         Err(err) if backend_unavailable(&err) => Err(SecretStoreError::Unavailable(err.to_string())),
         Err(err) => Err(SecretStoreError::Backend(err)),
     }
+}
+
+fn run_outside_tokio<F, T>(operation: F) -> Result<T, SecretStoreError>
+where
+    F: FnOnce() -> Result<T, SecretStoreError> + Send + 'static,
+    T: Send + 'static,
+{
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return match std::thread::spawn(operation).join() {
+            Ok(result) => result,
+            Err(_) => Err(SecretStoreError::Unavailable(
+                "failed to access Secret Service from worker thread".to_string(),
+            )),
+        };
+    }
+
+    operation()
 }
 
 pub(crate) fn is_unavailable(err: &SecretStoreError) -> bool {
