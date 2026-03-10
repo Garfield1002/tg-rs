@@ -1,6 +1,7 @@
 ---
 name: tg
 description: Use tg to send Telegram messages, attach files, and listen for replies from the command line. Trigger when the user wants to send notifications, share files, or receive messages via Telegram.
+user-invocable: true
 ---
 
 # tg - Telegram CLI
@@ -9,7 +10,8 @@ description: Use tg to send Telegram messages, attach files, and listen for repl
 
 ## Setup
 
-Run `tg setup` once to configure the bot token and chat ID.
+Ask the user to run `tg setup` once to configure the bot token and chat ID.
+You cannot do the setup alone.
 
 ## Sending messages
 
