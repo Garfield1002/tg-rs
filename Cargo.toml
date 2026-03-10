@@ -6,7 +6,6 @@ description = "A \"unix-like\" utility for sending yourself Telegram messages fr
 readme = "README.md"
 repository = "https://github.com/Garfield1002/tg-rs"
 license = "Unlicense"
-license-file = "LICENSE.md"
 
 [lib]
 path = "src/lib.rs"
