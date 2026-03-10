@@ -8,11 +8,11 @@ use teloxide::{
     types::{ChatId, Message},
 };
 
-use tg_cli::{load_setup_state, save_bot_config};
+use tg_cli::{bot_from_config_token, load_setup_status, save_bot_config, save_chat_id};
 
 /// Setup wizard for first-time users
 pub(crate) async fn run_setup() {
-    let config = load_setup_state();
+    let config = load_setup_status();
 
     if config.chat_id.is_some() {
         eprintln!("Already configured. Run `tg config reset` to reconfigure.");
@@ -20,11 +20,15 @@ pub(crate) async fn run_setup() {
     }
 
     eprintln!("Step 1 of 3 — Bot token\n\n");
-    let token = if let Some(token) = config.token {
+    let (bot, token) = if config.has_token {
         eprintln!("Bot token already configured. Run `tg config reset` to reconfigure.");
-        token
+        (
+            bot_from_config_token().expect("token reported configured but could not be loaded"),
+            None,
+        )
     } else {
-        prompt_token()
+        let token = prompt_token();
+        (Bot::new(token.clone()), Some(token))
     };
 
     let code = pairing_code();
@@ -35,12 +39,16 @@ pub(crate) async fn run_setup() {
          Open your bot in Telegram and send it /start.\n\
          Waiting..."
     );
-    let chat_id = retrieve_chat_id(&token, &code).await;
+    let chat_id = retrieve_chat_id(bot, &code).await;
 
     eprintln!("\nStep 3 of 3 — Confirm pairing\n\n");
     verify_code(&code).await;
 
-    save_bot_config(&token, chat_id);
+    if let Some(token) = token {
+        save_bot_config(&token, chat_id);
+    } else {
+        save_chat_id(chat_id);
+    }
 
     eprintln!("\nAll done! Try it out:\n\n  tg \"Hello, World!\"");
     std::process::exit(0);
@@ -66,11 +74,9 @@ fn prompt_token() -> String {
 }
 
 /// Retrieve a chat ID, this needs to be done in a seperate thread since we need to wait for the user to send a message to the bot in Telegram
-async fn retrieve_chat_id(token: &str, code: &str) -> i64 {
+async fn retrieve_chat_id(bot: Bot, code: &str) -> i64 {
     let (tx, rx) = tokio::sync::oneshot::channel::<ChatId>();
     let tx = Arc::new(Mutex::new(Some(tx)));
-
-    let bot = Bot::new(token);
 
     let code_for_repl = code.to_string();
     tokio::spawn(async move {

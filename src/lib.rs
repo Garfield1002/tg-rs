@@ -53,8 +53,8 @@ impl std::error::Error for SendMessageError {
 
 pub type TgResult<T> = Result<T, SendMessageError>;
 
-pub struct SetupState {
-    pub token: Option<String>,
+pub struct SetupStatus {
+    pub has_token: bool,
     pub chat_id: Option<i64>,
 }
 
@@ -186,12 +186,26 @@ pub async fn send_tg_message(text: String, parse_mode: ParseMode, silent: bool) 
     Ok(())
 }
 
-pub fn load_setup_state() -> SetupState {
+pub fn load_setup_status() -> SetupStatus {
     let config = Config::load();
-    SetupState {
-        token: config.resolved_token(),
+    SetupStatus {
+        has_token: config.resolved_token().is_some(),
         chat_id: config.chat_id,
     }
+}
+
+pub fn bot_from_config_token() -> TgResult<Bot> {
+    let config = Config::load();
+    let token = config.resolved_token().ok_or(SendMessageError::MissingToken)?;
+    Ok(Bot::new(token))
+}
+
+pub fn listen_config() -> TgResult<(Bot, ChatId)> {
+    let bot = bot_from_config_token()?;
+    let chat_id = Config::load()
+        .chat_id
+        .ok_or(SendMessageError::MissingChatId)?;
+    Ok((bot, ChatId(chat_id)))
 }
 
 pub fn inspect_bot_config() -> BotConfigStatus {
@@ -238,6 +252,12 @@ pub fn inspect_bot_config() -> BotConfigStatus {
 pub fn save_bot_config(token: &str, chat_id: i64) {
     let mut config = Config::load();
     let _ = config.persist_token(token);
+    config.chat_id = Some(chat_id);
+    config.save();
+}
+
+pub fn save_chat_id(chat_id: i64) {
+    let mut config = Config::load();
     config.chat_id = Some(chat_id);
     config.save();
 }

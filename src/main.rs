@@ -5,14 +5,13 @@ use std::{
 
 use clap::{Args, Parser, Subcommand};
 use teloxide::{
-    Bot,
     payloads::GetUpdatesSetters,
     prelude::Requester,
-    types::{ChatId, UpdateKind},
+    types::UpdateKind,
 };
 use tg_cli::{
     BotConfigStatus, ParseMode, SecretServiceStatus, TgSession, TokenStatus, delete_bot_config,
-    inspect_bot_config, load_setup_state, send_tg_message,
+    inspect_bot_config, listen_config, send_tg_message,
 };
 use std::path::PathBuf;
 
@@ -202,12 +201,7 @@ async fn run_messgae(cli: Cli) {
 }
 
 async fn run_listen() -> Result<(), tg_cli::SendMessageError> {
-    let config = load_setup_state();
-    let token = config.token.ok_or(tg_cli::SendMessageError::MissingToken)?;
-    let chat_id = config.chat_id.ok_or(tg_cli::SendMessageError::MissingChatId)?;
-
-    let bot = Bot::new(token);
-    let target_chat = ChatId(chat_id);
+    let (bot, target_chat) = listen_config()?;
 
     // Start from the next update so listen mode only captures new incoming messages.
     let mut offset: i32 = match bot.get_updates().timeout(0).await {
