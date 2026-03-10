@@ -1,5 +1,4 @@
 use std::{
-    fs,
     io::{IsTerminal, Read},
     time::{Duration, Instant},
 };
@@ -11,15 +10,14 @@ use teloxide::{
     prelude::Requester,
     types::{ChatId, UpdateKind},
 };
-use tg_cli::{ParseMode, TgSession, send_tg_message};
+use tg_cli::{
+    ParseMode, TgSession, config::{Config, config_path}, delete_bot_config, secret_store,
+    send_tg_message,
+};
 use std::path::PathBuf;
-
-use crate::config::{Config, config_path};
 
 use crate::setup::run_setup;
 
-mod config;
-mod secret_store;
 mod setup;
 
 #[derive(Parser)]
@@ -423,28 +421,7 @@ fn run_config(action: ConfigAction) {
             }
         }
         ConfigAction::Reset => {
-            let path = config_path();
-            let mut removed_any = false;
-
-            if path.exists() {
-                fs::remove_file(&path).expect("failed to delete config");
-                removed_any = true;
-            }
-
-            match secret_store::delete_token() {
-                Ok(()) => {
-                    removed_any = true;
-                }
-                Err(err) if secret_store::is_unavailable(&err) => {
-                    eprintln!(
-                        "Warning: Secret Service API unavailable; could not delete keyring token ({err})."
-                    );
-                }
-                Err(err) => {
-                    eprintln!("Warning: failed to delete keyring token ({err}).");
-                }
-            }
-
+            let removed_any = delete_bot_config();
             if removed_any {
                 println!("Configuration deleted. Run `tg setup` to reconfigure.");
             } else {

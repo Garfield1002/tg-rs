@@ -4,7 +4,7 @@ const SERVICE_NAME: &str = "tg-cli";
 const TOKEN_USERNAME: &str = "telegram-bot-token";
 
 #[derive(Debug)]
-pub(crate) enum SecretStoreError {
+pub enum SecretStoreError {
     Unavailable(String),
     Backend(keyring::Error),
 }
@@ -27,18 +27,16 @@ impl std::error::Error for SecretStoreError {
     }
 }
 
-pub(crate) fn load_token() -> Result<Option<String>, SecretStoreError> {
+pub fn load_token() -> Result<Option<String>, SecretStoreError> {
     run_outside_tokio(load_token_impl)
 }
 
-#[allow(dead_code)]
-pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
+pub fn save_token(token: &str) -> Result<(), SecretStoreError> {
     let token = token.to_string();
     run_outside_tokio(move || save_token_impl(&token))
 }
 
-#[allow(dead_code)]
-pub(crate) fn delete_token() -> Result<(), SecretStoreError> {
+pub fn delete_token() -> Result<(), SecretStoreError> {
     run_outside_tokio(delete_token_impl)
 }
 
@@ -121,7 +119,7 @@ fn ensure_non_mock_backend(entry: &Entry) -> Result<(), SecretStoreError> {
     Ok(())
 }
 
-pub(crate) fn is_unavailable(err: &SecretStoreError) -> bool {
+pub fn is_unavailable(err: &SecretStoreError) -> bool {
     matches!(err, SecretStoreError::Unavailable(_))
 }
 

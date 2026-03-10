@@ -1,4 +1,7 @@
-use std::io::{self};
+use std::{
+    fs,
+    io::{self},
+};
 
 use teloxide::{
     Bot, RequestError,
@@ -9,8 +12,8 @@ use teloxide::{
 
 use crate::config::Config;
 
-pub(crate) mod config;
-pub(crate) mod secret_store;
+pub mod config;
+pub mod secret_store;
 
 #[derive(Debug)]
 pub enum SendMessageError {
@@ -155,6 +158,39 @@ pub async fn send_tg_message(text: String, parse_mode: ParseMode, silent: bool) 
     let session = TgSession::from_config()?;
     session.send_message(text, parse_mode, silent).await?;
     Ok(())
+}
+
+pub fn save_bot_config(token: &str, chat_id: i64) {
+    let mut config = Config::load();
+    let _ = config.persist_token(token);
+    config.chat_id = Some(chat_id);
+    config.save();
+}
+
+pub fn delete_bot_config() -> bool {
+    let path = config::config_path();
+    let mut removed_any = false;
+
+    if path.exists() {
+        fs::remove_file(&path).expect("failed to delete config");
+        removed_any = true;
+    }
+
+    match secret_store::delete_token() {
+        Ok(()) => {
+            removed_any = true;
+        }
+        Err(err) if secret_store::is_unavailable(&err) => {
+            eprintln!(
+                "Warning: Secret Service API unavailable; could not delete keyring token ({err})."
+            );
+        }
+        Err(err) => {
+            eprintln!("Warning: failed to delete keyring token ({err}).");
+        }
+    }
+
+    removed_any
 }
 
 pub fn send_tg_message_blocking(text: String, parse_mode: ParseMode, silent: bool) -> TgResult<()> {

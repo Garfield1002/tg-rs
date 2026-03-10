@@ -8,11 +8,11 @@ use teloxide::{
     types::{ChatId, Message},
 };
 
-use crate::config::Config;
+use tg_cli::{config::Config, save_bot_config};
 
 /// Setup wizard for first-time users
 pub(crate) async fn run_setup() {
-    let mut config = Config::load();
+    let config = Config::load();
 
     if config.chat_id.is_some() {
         eprintln!("Already configured. Run `tg config reset` to reconfigure.");
@@ -24,9 +24,7 @@ pub(crate) async fn run_setup() {
         eprintln!("Bot token already configured. Run `tg config reset` to reconfigure.");
         token
     } else {
-        let token = prompt_token();
-        let _ = config.persist_token(&token);
-        token
+        prompt_token()
     };
 
     let code = pairing_code();
@@ -42,9 +40,7 @@ pub(crate) async fn run_setup() {
     eprintln!("\nStep 3 of 3 — Confirm pairing\n\n");
     verify_code(&code).await;
 
-    // Finalize the config file and save it
-    config.chat_id = Some(chat_id);
-    config.save();
+    save_bot_config(&token, chat_id);
 
     eprintln!("\nAll done! Try it out:\n\n  tg \"Hello, World!\"");
     std::process::exit(0);
