@@ -31,22 +31,10 @@ impl std::error::Error for SecretStoreError {
 }
 
 pub(crate) fn load_token() -> Result<Option<String>, SecretStoreError> {
-    run_outside_tokio(load_token_impl)
+    run_outside_tokio(|| load_token_from_entry(&token_entry()?))
 }
 
-pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
-    let token = token.to_string();
-    run_outside_tokio(move || save_token_impl(&token))
-}
-
-pub(crate) fn delete_token() -> Result<(), SecretStoreError> {
-    run_outside_tokio(delete_token_impl)
-}
-
-fn load_token_impl() -> Result<Option<String>, SecretStoreError> {
-    let entry = token_entry()?;
-    ensure_non_mock_backend(&entry)?;
-
+fn load_token_from_entry(entry: &Entry) -> Result<Option<String>, SecretStoreError> {
     match entry.get_password() {
         Ok(token) => {
             if token.is_empty() {
@@ -56,30 +44,24 @@ fn load_token_impl() -> Result<Option<String>, SecretStoreError> {
             }
         }
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(err) if backend_unavailable(&err) => {
-            Err(SecretStoreError::Unavailable(err.to_string()))
-        }
-        Err(err) => Err(SecretStoreError::Backend(err)),
+        Err(err) => Err(map_keyring_error(err)),
     }
 }
 
-fn save_token_impl(token: &str) -> Result<(), SecretStoreError> {
-    let entry = token_entry()?;
-    ensure_non_mock_backend(&entry)?;
-
-    match entry.set_password(token) {
-        Ok(()) => Ok(()),
-        Err(err) if backend_unavailable(&err) => {
-            Err(SecretStoreError::Unavailable(err.to_string()))
-        }
-        Err(err) => Err(SecretStoreError::Backend(err)),
-    }
+pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
+    let token = token.to_string();
+    run_outside_tokio(move || save_token_to_entry(&token_entry()?, &token))
 }
 
-fn delete_token_impl() -> Result<(), SecretStoreError> {
-    let entry = token_entry()?;
-    ensure_non_mock_backend(&entry)?;
+fn save_token_to_entry(entry: &Entry, token: &str) -> Result<(), SecretStoreError> {
+    entry.set_password(token).map_err(map_keyring_error)
+}
 
+pub(crate) fn delete_token() -> Result<(), SecretStoreError> {
+    run_outside_tokio(|| delete_token_from_entry(&token_entry()?))
+}
+
+fn delete_token_from_entry(entry: &Entry) -> Result<(), SecretStoreError> {
     map_delete_result(entry.delete_credential())
 }
 
@@ -87,10 +69,7 @@ fn map_delete_result(result: Result<(), keyring::Error>) -> Result<(), SecretSto
     match result {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
-        Err(err) if backend_unavailable(&err) => {
-            Err(SecretStoreError::Unavailable(err.to_string()))
-        }
-        Err(err) => Err(SecretStoreError::Backend(err)),
+        Err(err) => Err(map_keyring_error(err)),
     }
 }
 
@@ -111,7 +90,7 @@ where
     }
 }
 
-fn ensure_non_mock_backend(entry: &Entry) -> Result<(), SecretStoreError> {
+fn ensure_non_mock_backend(entry: Entry) -> Result<Entry, SecretStoreError> {
     match entry
         .get_credential()
         .downcast_ref::<keyring::mock::MockCredential>()
@@ -120,7 +99,7 @@ fn ensure_non_mock_backend(entry: &Entry) -> Result<(), SecretStoreError> {
             "secure keyring backend unavailable (keyring is using a non-persistent mock backend)"
                 .to_string(),
         )),
-        None => Ok(()),
+        None => Ok(entry),
     }
 }
 
@@ -129,13 +108,17 @@ pub(crate) fn is_unavailable(err: &SecretStoreError) -> bool {
 }
 
 fn token_entry() -> Result<Entry, SecretStoreError> {
-    Entry::new(SERVICE_NAME, TOKEN_USERNAME).map_err(|err| {
-        if backend_unavailable(&err) {
-            SecretStoreError::Unavailable(err.to_string())
-        } else {
-            SecretStoreError::Backend(err)
-        }
-    })
+    Entry::new(SERVICE_NAME, TOKEN_USERNAME)
+        .map_err(map_keyring_error)
+        .and_then(ensure_non_mock_backend)
+}
+
+fn map_keyring_error(err: keyring::Error) -> SecretStoreError {
+    if backend_unavailable(&err) {
+        SecretStoreError::Unavailable(err.to_string())
+    } else {
+        SecretStoreError::Backend(err)
+    }
 }
 
 fn backend_unavailable(err: &keyring::Error) -> bool {
