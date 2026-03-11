@@ -100,29 +100,28 @@ where
     T: Send + 'static,
 {
     if tokio::runtime::Handle::try_current().is_ok() {
-        return match std::thread::spawn(operation).join() {
+        match std::thread::spawn(operation).join() {
             Ok(result) => result,
             Err(_) => Err(SecretStoreError::Unavailable(
                 "failed to access Secret Service from worker thread".to_string(),
             )),
-        };
+        }
+    } else {
+        operation()
     }
-
-    operation()
 }
 
 fn ensure_non_mock_backend(entry: &Entry) -> Result<(), SecretStoreError> {
-    if entry
+    match entry
         .get_credential()
         .downcast_ref::<keyring::mock::MockCredential>()
-        .is_some()
     {
-        return Err(SecretStoreError::Unavailable(
+        Some(_) => Err(SecretStoreError::Unavailable(
             "secure keyring backend unavailable (keyring is using a non-persistent mock backend)"
                 .to_string(),
-        ));
+        )),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 pub(crate) fn is_unavailable(err: &SecretStoreError) -> bool {
