@@ -1,5 +1,9 @@
 # tg-rs
 
+[![Crates.io](https://img.shields.io/crates/v/tg-cli)](https://crates.io/crates/tg-cli)
+[![license](https://img.shields.io/crates/l/tg-cli)](https://github.com/Garfield1002/tg-rs/blob/HEAD/LICENSE.md)
+
+
 > ⚠️ This is a potentially dangerous vibe coded project. Use at your own risk.
 
 Send yourself Telegram messages from the command line.
