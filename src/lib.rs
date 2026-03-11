@@ -101,7 +101,9 @@ impl From<ParseMode> for TeloxideParseMode {
 impl TgSession {
     pub fn from_config() -> TgResult<Self> {
         let config = Config::load();
-        let token = config.resolved_token().ok_or(SendMessageError::MissingToken)?;
+        let token = config
+            .resolved_token()
+            .ok_or(SendMessageError::MissingToken)?;
         let chat_id = config.chat_id.ok_or(SendMessageError::MissingChatId)?;
 
         Ok(Self {
@@ -180,12 +182,6 @@ impl TgSession {
     }
 }
 
-pub async fn send_tg_message(text: String, parse_mode: ParseMode, silent: bool) -> TgResult<()> {
-    let session = TgSession::from_config()?;
-    session.send_message(text, parse_mode, silent).await?;
-    Ok(())
-}
-
 pub fn load_setup_status() -> SetupStatus {
     let config = Config::load();
     SetupStatus {
@@ -196,7 +192,9 @@ pub fn load_setup_status() -> SetupStatus {
 
 pub fn bot_from_config_token() -> TgResult<Bot> {
     let config = Config::load();
-    let token = config.resolved_token().ok_or(SendMessageError::MissingToken)?;
+    let token = config
+        .resolved_token()
+        .ok_or(SendMessageError::MissingToken)?;
     Ok(Bot::new(token))
 }
 
@@ -286,6 +284,12 @@ pub fn delete_bot_config() -> bool {
     }
 
     removed_any
+}
+
+pub async fn send_tg_message(text: String, parse_mode: ParseMode, silent: bool) -> TgResult<()> {
+    let session = TgSession::from_config()?;
+    session.send_message(text, parse_mode, silent).await?;
+    Ok(())
 }
 
 pub fn send_tg_message_blocking(text: String, parse_mode: ParseMode, silent: bool) -> TgResult<()> {

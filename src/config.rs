@@ -160,11 +160,8 @@ mod tests {
     #[test]
     fn load_from_path_parses_toml_when_present() {
         let path = unique_tmp_path("present-config");
-        std::fs::write(
-            &path,
-            "token = \"plaintext-token\"\nchat_id = 123456\n",
-        )
-        .expect("failed to write temporary config");
+        std::fs::write(&path, "token = \"plaintext-token\"\nchat_id = 123456\n")
+            .expect("failed to write temporary config");
 
         let config = Config::load_from_path(&path);
         assert_eq!(config.token.as_deref(), Some("plaintext-token"));
@@ -218,7 +215,11 @@ mod tests {
 
         let mut warnings = Vec::<String>::new();
         let token = config.resolved_token_with(
-            || Err(SecretStoreError::Unavailable("dbus unavailable".to_string())),
+            || {
+                Err(SecretStoreError::Unavailable(
+                    "dbus unavailable".to_string(),
+                ))
+            },
             |warning| warnings.push(warning),
             Path::new("/home/test/.config/tg/config.toml"),
         );
@@ -277,7 +278,11 @@ mod tests {
 
         let persistence = config.persist_token_with(
             "plaintext-token",
-            |_| Err(SecretStoreError::Unavailable("dbus unavailable".to_string())),
+            |_| {
+                Err(SecretStoreError::Unavailable(
+                    "dbus unavailable".to_string(),
+                ))
+            },
             |warning| warnings.push(warning),
             Path::new("/home/test/.config/tg/config.toml"),
         );

@@ -53,7 +53,9 @@ fn load_token_impl() -> Result<Option<String>, SecretStoreError> {
             }
         }
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(err) if backend_unavailable(&err) => Err(SecretStoreError::Unavailable(err.to_string())),
+        Err(err) if backend_unavailable(&err) => {
+            Err(SecretStoreError::Unavailable(err.to_string()))
+        }
         Err(err) => Err(SecretStoreError::Backend(err)),
     }
 }
@@ -64,7 +66,9 @@ fn save_token_impl(token: &str) -> Result<(), SecretStoreError> {
 
     match entry.set_password(token) {
         Ok(()) => Ok(()),
-        Err(err) if backend_unavailable(&err) => Err(SecretStoreError::Unavailable(err.to_string())),
+        Err(err) if backend_unavailable(&err) => {
+            Err(SecretStoreError::Unavailable(err.to_string()))
+        }
         Err(err) => Err(SecretStoreError::Backend(err)),
     }
 }
@@ -83,7 +87,9 @@ fn map_delete_result(result: Result<(), keyring::Error>) -> Result<(), SecretSto
     match result {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
-        Err(err) if backend_unavailable(&err) => Err(SecretStoreError::Unavailable(err.to_string())),
+        Err(err) if backend_unavailable(&err) => {
+            Err(SecretStoreError::Unavailable(err.to_string()))
+        }
         Err(err) => Err(SecretStoreError::Backend(err)),
     }
 }
@@ -160,9 +166,7 @@ mod tests {
 
     #[test]
     fn marks_no_storage_access_as_unavailable() {
-        let err = keyring::Error::NoStorageAccess(Box::new(io::Error::other(
-            "permission denied",
-        )));
+        let err = keyring::Error::NoStorageAccess(Box::new(io::Error::other("permission denied")));
         assert!(backend_unavailable(&err));
     }
 

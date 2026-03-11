@@ -4,16 +4,12 @@ use std::{
 };
 
 use clap::{Args, Parser, Subcommand};
-use teloxide::{
-    payloads::GetUpdatesSetters,
-    prelude::Requester,
-    types::UpdateKind,
-};
+use std::path::PathBuf;
+use teloxide::{payloads::GetUpdatesSetters, prelude::Requester, types::UpdateKind};
 use tg_cli::{
     BotConfigStatus, ParseMode, SecretServiceStatus, TgSession, TokenStatus, delete_bot_config,
     inspect_bot_config, listen_config, send_tg_message,
 };
-use std::path::PathBuf;
 
 use crate::setup::run_setup;
 
