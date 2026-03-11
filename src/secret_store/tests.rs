@@ -1,7 +1,7 @@
 use std::io;
 
 use std::any::Any;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi};
 use keyring::{Error, mock, set_default_credential_builder};
@@ -121,6 +121,26 @@ fn generic_store_errors_are_mapped_to_backend() {
     assert!(matches!(delete_token(), Err(SecretStoreError::Backend(_))));
 }
 
+#[test]
+fn token_round_trip_succeeds_with_persistent_backend() {
+    let _guard = BUILDER_LOCK.lock().expect("builder lock poisoned");
+    let state = Arc::new(Mutex::new(None));
+    set_default_credential_builder(Box::new(HappyPathBuilder {
+        state: Arc::clone(&state),
+    }));
+
+    assert_eq!(load_token().expect("initial load should succeed"), None);
+
+    save_token("abc123").expect("save should succeed");
+    assert_eq!(
+        load_token().expect("load after save should succeed"),
+        Some("abc123".to_string())
+    );
+
+    delete_token().expect("delete should succeed");
+    assert_eq!(load_token().expect("load after delete should succeed"), None);
+}
+
 #[derive(Debug)]
 struct UnavailableBuilder;
 
@@ -207,6 +227,61 @@ impl CredentialApi for BackendErrorCredential {
             "service".to_string(),
             "bad request".to_string(),
         ))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[derive(Debug)]
+struct HappyPathBuilder {
+    state: Arc<Mutex<Option<Vec<u8>>>>,
+}
+
+impl CredentialBuilderApi for HappyPathBuilder {
+    fn build(
+        &self,
+        _target: Option<&str>,
+        _service: &str,
+        _user: &str,
+    ) -> keyring::Result<Box<Credential>> {
+        Ok(Box::new(HappyPathCredential {
+            state: Arc::clone(&self.state),
+        }))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[derive(Debug)]
+struct HappyPathCredential {
+    state: Arc<Mutex<Option<Vec<u8>>>>,
+}
+
+impl CredentialApi for HappyPathCredential {
+    fn set_secret(&self, password: &[u8]) -> keyring::Result<()> {
+        let mut state = self.state.lock().expect("happy path state poisoned");
+        *state = Some(password.to_vec());
+        Ok(())
+    }
+
+    fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+        let state = self.state.lock().expect("happy path state poisoned");
+        match &*state {
+            Some(secret) => Ok(secret.clone()),
+            None => Err(Error::NoEntry),
+        }
+    }
+
+    fn delete_credential(&self) -> keyring::Result<()> {
+        let mut state = self.state.lock().expect("happy path state poisoned");
+        match state.take() {
+            Some(_) => Ok(()),
+            None => Err(Error::NoEntry),
+        }
     }
 
     fn as_any(&self) -> &dyn Any {
