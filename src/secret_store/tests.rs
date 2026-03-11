@@ -1,12 +1,72 @@
-use std::any::Any;
 use std::io;
+
+use std::any::Any;
 use std::sync::Mutex;
 
 use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi};
 use keyring::{Error, mock, set_default_credential_builder};
 
-#[path = "../src/secret_store.rs"]
-mod secret_store;
+use super::{
+    SecretStoreError, backend_unavailable, delete_token, is_unavailable, load_token,
+    map_delete_result, save_token,
+};
+
+#[test]
+fn marks_no_storage_access_as_unavailable() {
+    let err = keyring::Error::NoStorageAccess(Box::new(io::Error::other("permission denied")));
+    assert!(backend_unavailable(&err));
+}
+
+#[test]
+fn marks_platform_failures_with_secret_service_signals_as_unavailable() {
+    let err = keyring::Error::PlatformFailure(Box::new(io::Error::other(
+        "Secret Service is not available on this session bus",
+    )));
+    assert!(backend_unavailable(&err));
+}
+
+#[test]
+fn does_not_mark_unrelated_platform_failures_as_unavailable() {
+    let err =
+        keyring::Error::PlatformFailure(Box::new(io::Error::other("unexpected backend timeout")));
+    assert!(!backend_unavailable(&err));
+}
+
+#[test]
+fn does_not_mark_no_entry_as_unavailable() {
+    assert!(!backend_unavailable(&keyring::Error::NoEntry));
+}
+
+#[test]
+fn unavailable_helper_matches_only_unavailable_variant() {
+    let unavailable = SecretStoreError::Unavailable("dbus unavailable".to_string());
+    let backend = SecretStoreError::Backend(keyring::Error::NoEntry);
+
+    assert!(is_unavailable(&unavailable));
+    assert!(!is_unavailable(&backend));
+}
+
+#[test]
+fn delete_mapping_treats_no_entry_as_success() {
+    assert!(map_delete_result(Err(keyring::Error::NoEntry)).is_ok());
+}
+
+#[test]
+fn delete_mapping_marks_storage_access_errors_as_unavailable() {
+    let result = map_delete_result(Err(keyring::Error::NoStorageAccess(Box::new(
+        io::Error::other("permission denied"),
+    ))));
+    assert!(matches!(result, Err(SecretStoreError::Unavailable(_))));
+}
+
+#[test]
+fn delete_mapping_preserves_non_unavailable_backend_errors() {
+    let result = map_delete_result(Err(keyring::Error::Invalid(
+        "service".to_string(),
+        "bad entry".to_string(),
+    )));
+    assert!(matches!(result, Err(SecretStoreError::Backend(_))));
+}
 
 static BUILDER_LOCK: Mutex<()> = Mutex::new(());
 
@@ -16,16 +76,16 @@ fn mock_store_is_treated_as_unavailable() {
     set_default_credential_builder(mock::default_credential_builder());
 
     assert!(matches!(
-        secret_store::load_token(),
-        Err(secret_store::SecretStoreError::Unavailable(_))
+        load_token(),
+        Err(SecretStoreError::Unavailable(_))
     ));
     assert!(matches!(
-        secret_store::save_token("abc123"),
-        Err(secret_store::SecretStoreError::Unavailable(_))
+        save_token("abc123"),
+        Err(SecretStoreError::Unavailable(_))
     ));
     assert!(matches!(
-        secret_store::delete_token(),
-        Err(secret_store::SecretStoreError::Unavailable(_))
+        delete_token(),
+        Err(SecretStoreError::Unavailable(_))
     ));
 }
 
@@ -35,16 +95,16 @@ fn unavailable_store_errors_are_mapped_to_unavailable() {
     set_default_credential_builder(Box::new(UnavailableBuilder));
 
     assert!(matches!(
-        secret_store::load_token(),
-        Err(secret_store::SecretStoreError::Unavailable(_))
+        load_token(),
+        Err(SecretStoreError::Unavailable(_))
     ));
     assert!(matches!(
-        secret_store::save_token("abc123"),
-        Err(secret_store::SecretStoreError::Unavailable(_))
+        save_token("abc123"),
+        Err(SecretStoreError::Unavailable(_))
     ));
     assert!(matches!(
-        secret_store::delete_token(),
-        Err(secret_store::SecretStoreError::Unavailable(_))
+        delete_token(),
+        Err(SecretStoreError::Unavailable(_))
     ));
 }
 
@@ -53,18 +113,12 @@ fn generic_store_errors_are_mapped_to_backend() {
     let _guard = BUILDER_LOCK.lock().expect("builder lock poisoned");
     set_default_credential_builder(Box::new(BackendErrorBuilder));
 
+    assert!(matches!(load_token(), Err(SecretStoreError::Backend(_))));
     assert!(matches!(
-        secret_store::load_token(),
-        Err(secret_store::SecretStoreError::Backend(_))
+        save_token("abc123"),
+        Err(SecretStoreError::Backend(_))
     ));
-    assert!(matches!(
-        secret_store::save_token("abc123"),
-        Err(secret_store::SecretStoreError::Backend(_))
-    ));
-    assert!(matches!(
-        secret_store::delete_token(),
-        Err(secret_store::SecretStoreError::Backend(_))
-    ));
+    assert!(matches!(delete_token(), Err(SecretStoreError::Backend(_))));
 }
 
 #[derive(Debug)]

@@ -1,5 +1,8 @@
 use keyring::Entry;
 
+#[cfg(test)]
+mod tests;
+
 const SERVICE_NAME: &str = "tg-cli";
 const TOKEN_USERNAME: &str = "telegram-bot-token";
 
@@ -77,10 +80,7 @@ fn delete_token_impl() -> Result<(), SecretStoreError> {
     let entry = token_entry()?;
     ensure_non_mock_backend(&entry)?;
 
-    match map_delete_result(entry.delete_credential()) {
-        Ok(()) => Ok(()),
-        Err(err) => Err(err),
-    }
+    map_delete_result(entry.delete_credential())
 }
 
 fn map_delete_result(result: Result<(), keyring::Error>) -> Result<(), SecretStoreError> {
@@ -155,70 +155,5 @@ fn backend_unavailable(err: &keyring::Error) -> bool {
                 || message.contains("no session bus")
         }
         _ => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io;
-
-    use super::{SecretStoreError, backend_unavailable, is_unavailable, map_delete_result};
-
-    #[test]
-    fn marks_no_storage_access_as_unavailable() {
-        let err = keyring::Error::NoStorageAccess(Box::new(io::Error::other("permission denied")));
-        assert!(backend_unavailable(&err));
-    }
-
-    #[test]
-    fn marks_platform_failures_with_secret_service_signals_as_unavailable() {
-        let err = keyring::Error::PlatformFailure(Box::new(io::Error::other(
-            "Secret Service is not available on this session bus",
-        )));
-        assert!(backend_unavailable(&err));
-    }
-
-    #[test]
-    fn does_not_mark_unrelated_platform_failures_as_unavailable() {
-        let err = keyring::Error::PlatformFailure(Box::new(io::Error::other(
-            "unexpected backend timeout",
-        )));
-        assert!(!backend_unavailable(&err));
-    }
-
-    #[test]
-    fn does_not_mark_no_entry_as_unavailable() {
-        assert!(!backend_unavailable(&keyring::Error::NoEntry));
-    }
-
-    #[test]
-    fn unavailable_helper_matches_only_unavailable_variant() {
-        let unavailable = SecretStoreError::Unavailable("dbus unavailable".to_string());
-        let backend = SecretStoreError::Backend(keyring::Error::NoEntry);
-
-        assert!(is_unavailable(&unavailable));
-        assert!(!is_unavailable(&backend));
-    }
-
-    #[test]
-    fn delete_mapping_treats_no_entry_as_success() {
-        assert!(map_delete_result(Err(keyring::Error::NoEntry)).is_ok());
-    }
-
-    #[test]
-    fn delete_mapping_marks_storage_access_errors_as_unavailable() {
-        let result = map_delete_result(Err(keyring::Error::NoStorageAccess(Box::new(
-            io::Error::other("permission denied"),
-        ))));
-        assert!(matches!(result, Err(SecretStoreError::Unavailable(_))));
-    }
-
-    #[test]
-    fn delete_mapping_preserves_non_unavailable_backend_errors() {
-        let result = map_delete_result(Err(keyring::Error::Invalid(
-            "service".to_string(),
-            "bad entry".to_string(),
-        )));
-        assert!(matches!(result, Err(SecretStoreError::Backend(_))));
     }
 }
