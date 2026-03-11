@@ -188,17 +188,20 @@ tg attach -q data.csv         # quiet (no "Sent:" output)
 
 ### `tg config show`
 
-Print the config file path and its current contents:
+Print configuration status without revealing secrets:
 
 ```sh
 tg config show
 # Config path: /home/user/.config/tg/config.toml
-# chat_id = 123456789
+# Config file: present
+# Chat ID: 123456789
+# Secret Service: available
+# Token: configured (Secret Service)
 ```
 
 ### `tg config reset`
 
-Delete the config file so you can run setup again:
+Delete local config and keyring token so you can run setup again:
 
 ```sh
 tg config reset
@@ -207,14 +210,20 @@ tg setup
 
 ## Configuration
 
-Config is stored at `~/.config/tg/config.toml`:
+`tg` stores the bot token in Secret Service (GNOME Keyring / KWallet) when available.
+If unavailable, it falls back to plaintext in `~/.config/tg/config.toml` and prints a warning.
+
+The config file always stores `chat_id` and may include a fallback token:
 
 ```toml
-token = "123456:ABC-your-token-here"
 chat_id = 123456789
+
+# fallback only when Secret Service is unavailable
+token = "123456:ABC-your-token-here"
 ```
 
-Both values are written during `tg setup`. To change either, run `tg config reset` and go through setup again.
+`chat_id` is always written during `tg setup`.
+To change either value, run `tg config reset` and go through setup again.
 
 ## Examples
 

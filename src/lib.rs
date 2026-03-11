@@ -1,4 +1,8 @@
-use std::io::{self};
+use std::{
+    fs,
+    io::{self},
+    path::PathBuf,
+};
 
 use teloxide::{
     Bot, RequestError,
@@ -9,7 +13,8 @@ use teloxide::{
 
 use crate::config::Config;
 
-pub(crate) mod config;
+mod config;
+mod secret_store;
 
 #[derive(Debug)]
 pub enum SendMessageError {
@@ -48,6 +53,31 @@ impl std::error::Error for SendMessageError {
 
 pub type TgResult<T> = Result<T, SendMessageError>;
 
+pub struct SetupStatus {
+    pub has_token: bool,
+    pub chat_id: Option<i64>,
+}
+
+pub struct BotConfigStatus {
+    pub path: PathBuf,
+    pub config_file_present: bool,
+    pub chat_id: Option<i64>,
+    pub token: TokenStatus,
+    pub secret_service: SecretServiceStatus,
+}
+
+pub enum TokenStatus {
+    SecretService,
+    PlaintextFallback,
+    NotConfigured,
+}
+
+pub enum SecretServiceStatus {
+    Available,
+    Unavailable,
+    Error(String),
+}
+
 pub struct TgSession {
     bot: Bot,
     chat_id: ChatId,
@@ -71,7 +101,9 @@ impl From<ParseMode> for TeloxideParseMode {
 impl TgSession {
     pub fn from_config() -> TgResult<Self> {
         let config = Config::load();
-        let token = config.token.ok_or(SendMessageError::MissingToken)?;
+        let token = config
+            .resolved_token()
+            .ok_or(SendMessageError::MissingToken)?;
         let chat_id = config.chat_id.ok_or(SendMessageError::MissingChatId)?;
 
         Ok(Self {
@@ -148,6 +180,110 @@ impl TgSession {
         req.await.map_err(SendMessageError::Request)?;
         Ok(())
     }
+}
+
+pub fn load_setup_status() -> SetupStatus {
+    let config = Config::load();
+    SetupStatus {
+        has_token: config.resolved_token().is_some(),
+        chat_id: config.chat_id,
+    }
+}
+
+pub fn bot_from_config_token() -> TgResult<Bot> {
+    let config = Config::load();
+    let token = config
+        .resolved_token()
+        .ok_or(SendMessageError::MissingToken)?;
+    Ok(Bot::new(token))
+}
+
+pub fn listen_config() -> TgResult<(Bot, ChatId)> {
+    let bot = bot_from_config_token()?;
+    let chat_id = Config::load()
+        .chat_id
+        .ok_or(SendMessageError::MissingChatId)?;
+    Ok((bot, ChatId(chat_id)))
+}
+
+pub fn inspect_bot_config() -> BotConfigStatus {
+    let path = config::config_path();
+    let config = Config::load();
+
+    let (secret_service, token) = match secret_store::load_token() {
+        Ok(Some(_)) => (SecretServiceStatus::Available, TokenStatus::SecretService),
+        Ok(None) => (
+            SecretServiceStatus::Available,
+            if config.token.is_some() {
+                TokenStatus::PlaintextFallback
+            } else {
+                TokenStatus::NotConfigured
+            },
+        ),
+        Err(err) if secret_store::is_unavailable(&err) => (
+            SecretServiceStatus::Unavailable,
+            if config.token.is_some() {
+                TokenStatus::PlaintextFallback
+            } else {
+                TokenStatus::NotConfigured
+            },
+        ),
+        Err(err) => (
+            SecretServiceStatus::Error(err.to_string()),
+            if config.token.is_some() {
+                TokenStatus::PlaintextFallback
+            } else {
+                TokenStatus::NotConfigured
+            },
+        ),
+    };
+
+    BotConfigStatus {
+        config_file_present: path.exists(),
+        path,
+        chat_id: config.chat_id,
+        token,
+        secret_service,
+    }
+}
+
+pub fn save_bot_config(token: &str, chat_id: i64) {
+    let mut config = Config::load();
+    let _ = config.persist_token(token);
+    config.chat_id = Some(chat_id);
+    config.save();
+}
+
+pub fn save_chat_id(chat_id: i64) {
+    let mut config = Config::load();
+    config.chat_id = Some(chat_id);
+    config.save();
+}
+
+pub fn delete_bot_config() -> bool {
+    let path = config::config_path();
+    let mut removed_any = false;
+
+    if path.exists() {
+        fs::remove_file(&path).expect("failed to delete config");
+        removed_any = true;
+    }
+
+    match secret_store::delete_token() {
+        Ok(()) => {
+            removed_any = true;
+        }
+        Err(err) if secret_store::is_unavailable(&err) => {
+            eprintln!(
+                "Warning: Secret Service API unavailable; could not delete keyring token ({err})."
+            );
+        }
+        Err(err) => {
+            eprintln!("Warning: failed to delete keyring token ({err}).");
+        }
+    }
+
+    removed_any
 }
 
 pub async fn send_tg_message(text: String, parse_mode: ParseMode, silent: bool) -> TgResult<()> {

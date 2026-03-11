@@ -1,24 +1,18 @@
 use std::{
-    fs,
     io::{IsTerminal, Read},
     time::{Duration, Instant},
 };
 
 use clap::{Args, Parser, Subcommand};
-use teloxide::{
-    Bot,
-    payloads::GetUpdatesSetters,
-    prelude::Requester,
-    types::{ChatId, UpdateKind},
-};
-use tg_cli::{ParseMode, TgSession, send_tg_message};
 use std::path::PathBuf;
-
-use crate::config::{Config, config_path};
+use teloxide::{payloads::GetUpdatesSetters, prelude::Requester, types::UpdateKind};
+use tg_cli::{
+    BotConfigStatus, ParseMode, SecretServiceStatus, TgSession, TokenStatus, delete_bot_config,
+    inspect_bot_config, listen_config, send_tg_message,
+};
 
 use crate::setup::run_setup;
 
-mod config;
 mod setup;
 
 #[derive(Parser)]
@@ -203,14 +197,7 @@ async fn run_messgae(cli: Cli) {
 }
 
 async fn run_listen() -> Result<(), tg_cli::SendMessageError> {
-    let config = Config::load();
-    let token = config.token.ok_or(tg_cli::SendMessageError::MissingToken)?;
-    let chat_id = config
-        .chat_id
-        .ok_or(tg_cli::SendMessageError::MissingChatId)?;
-
-    let bot = Bot::new(token);
-    let target_chat = ChatId(chat_id);
+    let (bot, target_chat) = listen_config()?;
 
     // Start from the next update so listen mode only captures new incoming messages.
     let mut offset: i32 = match bot.get_updates().timeout(0).await {
@@ -366,23 +353,49 @@ async fn run_attach(args: AttachArgs) -> Result<(), tg_cli::SendMessageError> {
 fn run_config(action: ConfigAction) {
     match action {
         ConfigAction::Show => {
-            let path = config_path();
-            println!("Config path: {}", path.display());
-            if path.exists() {
-                let contents = fs::read_to_string(&path).unwrap_or_default();
-                print!("{}", contents);
-            } else {
-                println!("(no config file found)");
-            }
+            let status = inspect_bot_config();
+
+            println!("Config path: {}", status.path.display());
+            println!(
+                "Config file: {}",
+                if status.config_file_present {
+                    "present"
+                } else {
+                    "missing"
+                }
+            );
+            println!(
+                "Chat ID: {}",
+                match status.chat_id {
+                    Some(chat_id) => chat_id.to_string(),
+                    None => "not configured".to_string(),
+                }
+            );
+
+            print_config_status(status);
         }
         ConfigAction::Reset => {
-            let path = config_path();
-            if path.exists() {
-                fs::remove_file(&path).expect("failed to delete config");
-                println!("Config deleted. Run `tg setup` to reconfigure.");
+            let removed_any = delete_bot_config();
+            if removed_any {
+                println!("Configuration deleted. Run `tg setup` to reconfigure.");
             } else {
-                println!("No config file found.");
+                println!("No configuration found.");
             }
         }
     }
+}
+
+fn print_config_status(status: BotConfigStatus) {
+    match status.secret_service {
+        SecretServiceStatus::Available => println!("Secret Service: available"),
+        SecretServiceStatus::Unavailable => println!("Secret Service: unavailable"),
+        SecretServiceStatus::Error(err) => println!("Secret Service: error ({err})"),
+    }
+
+    let token = match status.token {
+        TokenStatus::SecretService => "configured (Secret Service)",
+        TokenStatus::PlaintextFallback => "configured (plaintext fallback)",
+        TokenStatus::NotConfigured => "not configured",
+    };
+    println!("Token: {token}");
 }
