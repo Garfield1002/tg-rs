@@ -320,6 +320,13 @@ pub async fn delete_bot_config(profile: Option<&str>) -> bool {
     removed_any
 }
 
+pub fn list_profile_names() -> Vec<String> {
+    let file = ConfigFile::load();
+    let mut names: Vec<String> = file.profiles.keys().cloned().collect();
+    names.sort();
+    names
+}
+
 pub async fn send_tg_message(
     text: String,
     parse_mode: ParseMode,

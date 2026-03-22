@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use teloxide::{payloads::GetUpdatesSetters, prelude::Requester, types::UpdateKind};
 use tg_cli::{
     BotConfigStatus, ParseMode, SecretServiceStatus, TgSession, TokenStatus, delete_bot_config,
-    inspect_bot_config, listen_config, send_tg_message,
+    inspect_bot_config, list_profile_names, listen_config, send_tg_message,
 };
 
 use crate::setup::run_setup;
@@ -403,8 +403,27 @@ async fn run_config(action: ConfigAction, profile: Option<&str>) {
                     None => "not configured".to_string(),
                 }
             );
-
             print_config_status(status);
+
+            if profile.is_none() {
+                let names = list_profile_names();
+                if !names.is_empty() {
+                    println!("\nAvailable profiles:");
+                    for name in &names {
+                        let ps = inspect_bot_config(Some(name)).await;
+                        let chat = match ps.chat_id {
+                            Some(id) => id.to_string(),
+                            None => "not configured".to_string(),
+                        };
+                        let token = match ps.token {
+                            TokenStatus::SecretService => "configured (Secret Service)",
+                            TokenStatus::PlaintextFallback => "configured (plaintext fallback)",
+                            TokenStatus::NotConfigured => "not configured",
+                        };
+                        println!("  {name}: Chat ID: {chat}, Token: {token}");
+                    }
+                }
+            }
         }
         ConfigAction::Reset => {
             let removed_any = delete_bot_config(profile).await;
