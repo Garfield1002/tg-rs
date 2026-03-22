@@ -99,10 +99,11 @@ impl From<ParseMode> for TeloxideParseMode {
 }
 
 impl TgSession {
-    pub fn from_config() -> TgResult<Self> {
+    pub async fn from_config() -> TgResult<Self> {
         let config = Config::load();
         let token = config
             .resolved_token()
+            .await
             .ok_or(SendMessageError::MissingToken)?;
         let chat_id = config.chat_id.ok_or(SendMessageError::MissingChatId)?;
 
@@ -182,35 +183,36 @@ impl TgSession {
     }
 }
 
-pub fn load_setup_status() -> SetupStatus {
+pub async fn load_setup_status() -> SetupStatus {
     let config = Config::load();
     SetupStatus {
-        has_token: config.resolved_token().is_some(),
+        has_token: config.resolved_token().await.is_some(),
         chat_id: config.chat_id,
     }
 }
 
-pub fn bot_from_config_token() -> TgResult<Bot> {
+pub async fn bot_from_config_token() -> TgResult<Bot> {
     let config = Config::load();
     let token = config
         .resolved_token()
+        .await
         .ok_or(SendMessageError::MissingToken)?;
     Ok(Bot::new(token))
 }
 
-pub fn listen_config() -> TgResult<(Bot, ChatId)> {
-    let bot = bot_from_config_token()?;
+pub async fn listen_config() -> TgResult<(Bot, ChatId)> {
+    let bot = bot_from_config_token().await?;
     let chat_id = Config::load()
         .chat_id
         .ok_or(SendMessageError::MissingChatId)?;
     Ok((bot, ChatId(chat_id)))
 }
 
-pub fn inspect_bot_config() -> BotConfigStatus {
+pub async fn inspect_bot_config() -> BotConfigStatus {
     let path = config::config_path();
     let config = Config::load();
 
-    let (secret_service, token) = match secret_store::load_token() {
+    let (secret_service, token) = match secret_store::load_token().await {
         Ok(Some(_)) => (SecretServiceStatus::Available, TokenStatus::SecretService),
         Ok(None) => (
             SecretServiceStatus::Available,
@@ -247,9 +249,9 @@ pub fn inspect_bot_config() -> BotConfigStatus {
     }
 }
 
-pub fn save_bot_config(token: &str, chat_id: i64) {
+pub async fn save_bot_config(token: &str, chat_id: i64) {
     let mut config = Config::load();
-    let _ = config.persist_token(token);
+    let _ = config.persist_token(token).await;
     config.chat_id = Some(chat_id);
     config.save();
 }
@@ -260,7 +262,7 @@ pub fn save_chat_id(chat_id: i64) {
     config.save();
 }
 
-pub fn delete_bot_config() -> bool {
+pub async fn delete_bot_config() -> bool {
     let path = config::config_path();
     let mut removed_any = false;
 
@@ -269,7 +271,7 @@ pub fn delete_bot_config() -> bool {
         removed_any = true;
     }
 
-    match secret_store::delete_token() {
+    match secret_store::delete_token().await {
         Ok(()) => {
             removed_any = true;
         }
@@ -287,7 +289,7 @@ pub fn delete_bot_config() -> bool {
 }
 
 pub async fn send_tg_message(text: String, parse_mode: ParseMode, silent: bool) -> TgResult<()> {
-    let session = TgSession::from_config()?;
+    let session = TgSession::from_config().await?;
     session.send_message(text, parse_mode, silent).await?;
     Ok(())
 }

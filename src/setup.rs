@@ -12,7 +12,7 @@ use tg_cli::{bot_from_config_token, load_setup_status, save_bot_config, save_cha
 
 /// Setup wizard for first-time users
 pub(crate) async fn run_setup() {
-    let config = load_setup_status();
+    let config = load_setup_status().await;
 
     if config.chat_id.is_some() {
         eprintln!("Already configured. Run `tg config reset` to reconfigure.");
@@ -23,7 +23,9 @@ pub(crate) async fn run_setup() {
     let (bot, token) = if config.has_token {
         eprintln!("Bot token already configured. Run `tg config reset` to reconfigure.");
         (
-            bot_from_config_token().expect("token reported configured but could not be loaded"),
+            bot_from_config_token()
+                .await
+                .expect("token reported configured but could not be loaded"),
             None,
         )
     } else {
@@ -45,7 +47,7 @@ pub(crate) async fn run_setup() {
     verify_code(&code).await;
 
     if let Some(token) = token {
-        save_bot_config(&token, chat_id);
+        save_bot_config(&token, chat_id).await;
     } else {
         save_chat_id(chat_id);
     }

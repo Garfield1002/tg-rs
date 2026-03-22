@@ -43,17 +43,14 @@ impl Config {
     }
 
     /// Resolve the token from Secret Service first, then fallback to plaintext config.
-    pub(crate) fn resolved_token(&self) -> Option<String> {
+    pub(crate) async fn resolved_token(&self) -> Option<String> {
         let path = config_path();
-        self.resolved_token_with(
-            secret_store::load_token,
-            |message| eprintln!("{message}"),
-            &path,
-        )
+        self.resolved_token_with(secret_store::load_token, |message| eprintln!("{message}"), &path)
+            .await
     }
 
     /// Save token to Secret Service first, then fallback to plaintext config on failure.
-    pub(crate) fn persist_token(&mut self, token: &str) -> TokenPersistence {
+    pub(crate) async fn persist_token(&mut self, token: &str) -> TokenPersistence {
         let path = config_path();
         self.persist_token_with(
             token,
@@ -61,6 +58,7 @@ impl Config {
             |message| eprintln!("{message}"),
             &path,
         )
+        .await
     }
 
     fn load_from_path(path: &std::path::Path) -> Self {
@@ -72,17 +70,18 @@ impl Config {
         }
     }
 
-    fn resolved_token_with<F, W>(
+    async fn resolved_token_with<F, Fut, W>(
         &self,
         load_secret: F,
         mut warn: W,
         config_path: &std::path::Path,
     ) -> Option<String>
     where
-        F: FnOnce() -> Result<Option<String>, secret_store::SecretStoreError>,
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Option<String>, secret_store::SecretStoreError>>,
         W: FnMut(String),
     {
-        match load_secret() {
+        match load_secret().await {
             Ok(Some(token)) => Some(token),
             Ok(None) => self.token.clone(),
             Err(err) if secret_store::is_unavailable(&err) => {
@@ -102,7 +101,7 @@ impl Config {
         }
     }
 
-    fn persist_token_with<F, W>(
+    async fn persist_token_with<F, Fut, W>(
         &mut self,
         token: &str,
         save_secret: F,
@@ -110,10 +109,11 @@ impl Config {
         config_path: &std::path::Path,
     ) -> TokenPersistence
     where
-        F: FnOnce(&str) -> Result<(), secret_store::SecretStoreError>,
+        F: FnOnce(String) -> Fut,
+        Fut: std::future::Future<Output = Result<(), secret_store::SecretStoreError>>,
         W: FnMut(String),
     {
-        match save_secret(token) {
+        match save_secret(token.to_string()).await {
             Ok(()) => {
                 self.token = None;
                 TokenPersistence::SecretService
@@ -170,59 +170,65 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    #[test]
-    fn resolved_token_prefers_secret_service_value() {
+    #[tokio::test]
+    async fn resolved_token_prefers_secret_service_value() {
         let config = Config {
             token: Some("plaintext-token".to_string()),
             chat_id: None,
         };
 
         let mut warnings = Vec::<String>::new();
-        let token = config.resolved_token_with(
-            || Ok(Some("secret-service-token".to_string())),
-            |warning| warnings.push(warning),
-            Path::new("/home/test/.config/tg/config.toml"),
-        );
+        let token = config
+            .resolved_token_with(
+                || async { Ok(Some("secret-service-token".to_string())) },
+                |warning| warnings.push(warning),
+                Path::new("/home/test/.config/tg/config.toml"),
+            )
+            .await;
 
         assert_eq!(token.as_deref(), Some("secret-service-token"));
         assert!(warnings.is_empty());
     }
 
-    #[test]
-    fn resolved_token_falls_back_to_plaintext_when_secret_missing() {
+    #[tokio::test]
+    async fn resolved_token_falls_back_to_plaintext_when_secret_missing() {
         let config = Config {
             token: Some("plaintext-token".to_string()),
             chat_id: None,
         };
 
         let mut warnings = Vec::<String>::new();
-        let token = config.resolved_token_with(
-            || Ok(None),
-            |warning| warnings.push(warning),
-            Path::new("/home/test/.config/tg/config.toml"),
-        );
+        let token = config
+            .resolved_token_with(
+                || async { Ok(None) },
+                |warning| warnings.push(warning),
+                Path::new("/home/test/.config/tg/config.toml"),
+            )
+            .await;
 
         assert_eq!(token.as_deref(), Some("plaintext-token"));
         assert!(warnings.is_empty());
     }
 
-    #[test]
-    fn resolved_token_warns_and_falls_back_when_secret_service_unavailable() {
+    #[tokio::test]
+    async fn resolved_token_warns_and_falls_back_when_secret_service_unavailable() {
         let config = Config {
             token: Some("plaintext-token".to_string()),
             chat_id: None,
         };
 
         let mut warnings = Vec::<String>::new();
-        let token = config.resolved_token_with(
-            || {
-                Err(SecretStoreError::Unavailable(
-                    "dbus unavailable".to_string(),
-                ))
-            },
-            |warning| warnings.push(warning),
-            Path::new("/home/test/.config/tg/config.toml"),
-        );
+        let token = config
+            .resolved_token_with(
+                || async {
+                    Err(SecretStoreError::Unavailable(
+                        "dbus unavailable".to_string(),
+                    ))
+                },
+                |warning| warnings.push(warning),
+                Path::new("/home/test/.config/tg/config.toml"),
+            )
+            .await;
 
         assert_eq!(token.as_deref(), Some("plaintext-token"));
         assert_eq!(warnings.len(), 1);
@@ -232,19 +238,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolved_token_warns_and_falls_back_on_other_secret_errors() {
+    #[tokio::test]
+    async fn resolved_token_warns_and_falls_back_on_other_secret_errors() {
         let config = Config {
             token: Some("plaintext-token".to_string()),
             chat_id: None,
         };
 
         let mut warnings = Vec::<String>::new();
-        let token = config.resolved_token_with(
-            || Err(SecretStoreError::Backend(keyring::Error::NoEntry)),
-            |warning| warnings.push(warning),
-            Path::new("/home/test/.config/tg/config.toml"),
-        );
+        let token = config
+            .resolved_token_with(
+                || async { Err(SecretStoreError::Backend(keyring::Error::NoEntry)) },
+                |warning| warnings.push(warning),
+                Path::new("/home/test/.config/tg/config.toml"),
+            )
+            .await;
 
         assert_eq!(token.as_deref(), Some("plaintext-token"));
         assert_eq!(warnings.len(), 1);
@@ -254,38 +262,42 @@ mod tests {
         );
     }
 
-    #[test]
-    fn persist_token_uses_secret_service_when_available() {
+    #[tokio::test]
+    async fn persist_token_uses_secret_service_when_available() {
         let mut config = Config::default();
         let mut warnings = Vec::<String>::new();
 
-        let persistence = config.persist_token_with(
-            "secret-service-token",
-            |_| Ok(()),
-            |warning| warnings.push(warning),
-            Path::new("/home/test/.config/tg/config.toml"),
-        );
+        let persistence = config
+            .persist_token_with(
+                "secret-service-token",
+                |_| async { Ok(()) },
+                |warning| warnings.push(warning),
+                Path::new("/home/test/.config/tg/config.toml"),
+            )
+            .await;
 
         assert_eq!(persistence, TokenPersistence::SecretService);
         assert!(config.token.is_none());
         assert!(warnings.is_empty());
     }
 
-    #[test]
-    fn persist_token_warns_and_falls_back_when_secret_service_unavailable() {
+    #[tokio::test]
+    async fn persist_token_warns_and_falls_back_when_secret_service_unavailable() {
         let mut config = Config::default();
         let mut warnings = Vec::<String>::new();
 
-        let persistence = config.persist_token_with(
-            "plaintext-token",
-            |_| {
-                Err(SecretStoreError::Unavailable(
-                    "dbus unavailable".to_string(),
-                ))
-            },
-            |warning| warnings.push(warning),
-            Path::new("/home/test/.config/tg/config.toml"),
-        );
+        let persistence = config
+            .persist_token_with(
+                "plaintext-token",
+                |_| async {
+                    Err(SecretStoreError::Unavailable(
+                        "dbus unavailable".to_string(),
+                    ))
+                },
+                |warning| warnings.push(warning),
+                Path::new("/home/test/.config/tg/config.toml"),
+            )
+            .await;
 
         assert_eq!(persistence, TokenPersistence::PlaintextFallback);
         assert_eq!(config.token.as_deref(), Some("plaintext-token"));
@@ -296,17 +308,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn persist_token_warns_and_falls_back_on_other_secret_errors() {
+    #[tokio::test]
+    async fn persist_token_warns_and_falls_back_on_other_secret_errors() {
         let mut config = Config::default();
         let mut warnings = Vec::<String>::new();
 
-        let persistence = config.persist_token_with(
-            "plaintext-token",
-            |_| Err(SecretStoreError::Backend(keyring::Error::NoEntry)),
-            |warning| warnings.push(warning),
-            Path::new("/home/test/.config/tg/config.toml"),
-        );
+        let persistence = config
+            .persist_token_with(
+                "plaintext-token",
+                |_| async { Err(SecretStoreError::Backend(keyring::Error::NoEntry)) },
+                |warning| warnings.push(warning),
+                Path::new("/home/test/.config/tg/config.toml"),
+            )
+            .await;
 
         assert_eq!(persistence, TokenPersistence::PlaintextFallback);
         assert_eq!(config.token.as_deref(), Some("plaintext-token"));

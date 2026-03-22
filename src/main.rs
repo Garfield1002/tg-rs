@@ -149,7 +149,7 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Command::Config(args)) => run_config(args.action),
+        Some(Command::Config(args)) => run_config(args.action).await,
         None => run_messgae(cli).await,
     }
 }
@@ -197,7 +197,7 @@ async fn run_messgae(cli: Cli) {
 }
 
 async fn run_listen() -> Result<(), tg_cli::SendMessageError> {
-    let (bot, target_chat) = listen_config()?;
+    let (bot, target_chat) = listen_config().await?;
 
     // Start from the next update so listen mode only captures new incoming messages.
     let mut offset: i32 = match bot.get_updates().timeout(0).await {
@@ -276,7 +276,7 @@ async fn push_update(
 
 async fn run_interactive(cli: Cli) -> Result<(), tg_cli::SendMessageError> {
     let parse_mode = parse_mode_from_cli(&cli.parse_mode);
-    let session = TgSession::from_config()?;
+    let session = TgSession::from_config().await?;
     let mut message_id: Option<i32> = None;
     let update_interval = Duration::from_secs(cli.interactive_frequency);
 
@@ -332,7 +332,7 @@ async fn run_interactive(cli: Cli) -> Result<(), tg_cli::SendMessageError> {
 }
 
 async fn run_attach(args: AttachArgs) -> Result<(), tg_cli::SendMessageError> {
-    let session = TgSession::from_config()?;
+    let session = TgSession::from_config().await?;
 
     for path in &args.files {
         if !path.exists() {
@@ -350,10 +350,10 @@ async fn run_attach(args: AttachArgs) -> Result<(), tg_cli::SendMessageError> {
     Ok(())
 }
 
-fn run_config(action: ConfigAction) {
+async fn run_config(action: ConfigAction) {
     match action {
         ConfigAction::Show => {
-            let status = inspect_bot_config();
+            let status = inspect_bot_config().await;
 
             println!("Config path: {}", status.path.display());
             println!(
@@ -375,7 +375,7 @@ fn run_config(action: ConfigAction) {
             print_config_status(status);
         }
         ConfigAction::Reset => {
-            let removed_any = delete_bot_config();
+            let removed_any = delete_bot_config().await;
             if removed_any {
                 println!("Configuration deleted. Run `tg setup` to reconfigure.");
             } else {

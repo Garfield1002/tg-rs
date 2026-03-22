@@ -30,8 +30,14 @@ impl std::error::Error for SecretStoreError {
     }
 }
 
-pub(crate) fn load_token() -> Result<Option<String>, SecretStoreError> {
-    run_outside_tokio(|| load_token_from_entry(&token_entry()?))
+pub(crate) async fn load_token() -> Result<Option<String>, SecretStoreError> {
+    tokio::task::spawn_blocking(|| load_token_from_entry(&token_entry()?))
+        .await
+        .unwrap_or_else(|_| {
+            Err(SecretStoreError::Unavailable(
+                "failed to access Secret Service from worker thread".to_string(),
+            ))
+        })
 }
 
 fn load_token_from_entry(entry: &Entry) -> Result<Option<String>, SecretStoreError> {
@@ -48,17 +54,28 @@ fn load_token_from_entry(entry: &Entry) -> Result<Option<String>, SecretStoreErr
     }
 }
 
-pub(crate) fn save_token(token: &str) -> Result<(), SecretStoreError> {
-    let token = token.to_string();
-    run_outside_tokio(move || save_token_to_entry(&token_entry()?, &token))
+pub(crate) async fn save_token(token: String) -> Result<(), SecretStoreError> {
+    tokio::task::spawn_blocking(move || save_token_to_entry(&token_entry()?, &token))
+        .await
+        .unwrap_or_else(|_| {
+            Err(SecretStoreError::Unavailable(
+                "failed to access Secret Service from worker thread".to_string(),
+            ))
+        })
 }
 
 fn save_token_to_entry(entry: &Entry, token: &str) -> Result<(), SecretStoreError> {
     entry.set_password(token).map_err(map_keyring_error)
 }
 
-pub(crate) fn delete_token() -> Result<(), SecretStoreError> {
-    run_outside_tokio(|| delete_token_from_entry(&token_entry()?))
+pub(crate) async fn delete_token() -> Result<(), SecretStoreError> {
+    tokio::task::spawn_blocking(|| delete_token_from_entry(&token_entry()?))
+        .await
+        .unwrap_or_else(|_| {
+            Err(SecretStoreError::Unavailable(
+                "failed to access Secret Service from worker thread".to_string(),
+            ))
+        })
 }
 
 fn delete_token_from_entry(entry: &Entry) -> Result<(), SecretStoreError> {
@@ -73,22 +90,6 @@ fn map_delete_result(result: Result<(), keyring::Error>) -> Result<(), SecretSto
     }
 }
 
-fn run_outside_tokio<F, T>(operation: F) -> Result<T, SecretStoreError>
-where
-    F: FnOnce() -> Result<T, SecretStoreError> + Send + 'static,
-    T: Send + 'static,
-{
-    if tokio::runtime::Handle::try_current().is_ok() {
-        match std::thread::spawn(operation).join() {
-            Ok(result) => result,
-            Err(_) => Err(SecretStoreError::Unavailable(
-                "failed to access Secret Service from worker thread".to_string(),
-            )),
-        }
-    } else {
-        operation()
-    }
-}
 
 fn ensure_non_mock_backend(entry: Entry) -> Result<Entry, SecretStoreError> {
     match entry
