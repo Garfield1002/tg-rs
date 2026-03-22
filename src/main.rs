@@ -25,6 +25,10 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
+    /// Profile to use (overrides TG_PROFILE environment variable)
+    #[arg(short = 'p', long, global = true)]
+    profile: Option<String>,
+
     /// Interpret escape sequences (\n, \t, \\)
     #[arg(short = 'e')]
     escape: bool,
@@ -105,6 +109,23 @@ enum ConfigAction {
     Reset,
 }
 
+fn resolve_profile(cli_arg: Option<String>) -> Option<String> {
+    cli_arg.or_else(|| std::env::var("TG_PROFILE").ok())
+}
+
+fn validate_profile_name(name: &str) {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        eprintln!(
+            "Invalid profile name '{name}': only alphanumeric characters, hyphens, and underscores are allowed."
+        );
+        std::process::exit(1);
+    }
+}
+
 fn interpret_escapes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -135,28 +156,33 @@ async fn main() {
 
     let cli = Cli::parse();
 
+    let profile = resolve_profile(cli.profile.clone());
+    if let Some(ref name) = profile {
+        validate_profile_name(name);
+    }
+
     match cli.command {
-        Some(Command::Setup) => run_setup().await,
+        Some(Command::Setup) => run_setup(profile.as_deref()).await,
         Some(Command::Listen) => {
-            if let Err(err) = run_listen().await {
+            if let Err(err) = run_listen(profile.as_deref()).await {
                 eprintln!("{}", err);
                 std::process::exit(1);
             }
         }
         Some(Command::Attach(args)) => {
-            if let Err(err) = run_attach(args).await {
+            if let Err(err) = run_attach(args, profile.as_deref()).await {
                 eprintln!("{}", err);
                 std::process::exit(1);
             }
         }
-        Some(Command::Config(args)) => run_config(args.action).await,
-        None => run_messgae(cli).await,
+        Some(Command::Config(args)) => run_config(args.action, profile.as_deref()).await,
+        None => run_messgae(cli, profile.as_deref()).await,
     }
 }
 
-async fn run_messgae(cli: Cli) {
+async fn run_messgae(cli: Cli, profile: Option<&str>) {
     if cli.interactive {
-        if let Err(err) = run_interactive(cli).await {
+        if let Err(err) = run_interactive(cli, profile).await {
             eprintln!("{}", err);
             std::process::exit(1);
         }
@@ -190,14 +216,14 @@ async fn run_messgae(cli: Cli) {
         }
     };
 
-    if let Err(err) = send_tg_message(text, parse_mode, cli.silent).await {
+    if let Err(err) = send_tg_message(text, parse_mode, cli.silent, profile).await {
         eprintln!("{}", err);
         std::process::exit(1);
     }
 }
 
-async fn run_listen() -> Result<(), tg_cli::SendMessageError> {
-    let (bot, target_chat) = listen_config().await?;
+async fn run_listen(profile: Option<&str>) -> Result<(), tg_cli::SendMessageError> {
+    let (bot, target_chat) = listen_config(profile).await?;
 
     // Start from the next update so listen mode only captures new incoming messages.
     let mut offset: i32 = match bot.get_updates().timeout(0).await {
@@ -274,9 +300,9 @@ async fn push_update(
     }
 }
 
-async fn run_interactive(cli: Cli) -> Result<(), tg_cli::SendMessageError> {
+async fn run_interactive(cli: Cli, profile: Option<&str>) -> Result<(), tg_cli::SendMessageError> {
     let parse_mode = parse_mode_from_cli(&cli.parse_mode);
-    let session = TgSession::from_config().await?;
+    let session = TgSession::from_config(profile).await?;
     let mut message_id: Option<i32> = None;
     let update_interval = Duration::from_secs(cli.interactive_frequency);
 
@@ -331,8 +357,11 @@ async fn run_interactive(cli: Cli) -> Result<(), tg_cli::SendMessageError> {
     Ok(())
 }
 
-async fn run_attach(args: AttachArgs) -> Result<(), tg_cli::SendMessageError> {
-    let session = TgSession::from_config().await?;
+async fn run_attach(
+    args: AttachArgs,
+    profile: Option<&str>,
+) -> Result<(), tg_cli::SendMessageError> {
+    let session = TgSession::from_config(profile).await?;
 
     for path in &args.files {
         if !path.exists() {
@@ -350,11 +379,14 @@ async fn run_attach(args: AttachArgs) -> Result<(), tg_cli::SendMessageError> {
     Ok(())
 }
 
-async fn run_config(action: ConfigAction) {
+async fn run_config(action: ConfigAction, profile: Option<&str>) {
     match action {
         ConfigAction::Show => {
-            let status = inspect_bot_config().await;
+            let status = inspect_bot_config(profile).await;
 
+            if let Some(name) = profile {
+                println!("Profile: {name}");
+            }
             println!("Config path: {}", status.path.display());
             println!(
                 "Config file: {}",
@@ -375,11 +407,19 @@ async fn run_config(action: ConfigAction) {
             print_config_status(status);
         }
         ConfigAction::Reset => {
-            let removed_any = delete_bot_config().await;
+            let removed_any = delete_bot_config(profile).await;
             if removed_any {
-                println!("Configuration deleted. Run `tg setup` to reconfigure.");
+                match profile {
+                    None => println!("Configuration deleted. Run `tg setup` to reconfigure."),
+                    Some(name) => println!(
+                        "Profile '{name}' deleted. Run `tg --profile {name} setup` to reconfigure."
+                    ),
+                }
             } else {
-                println!("No configuration found.");
+                match profile {
+                    None => println!("No configuration found."),
+                    Some(name) => println!("Profile '{name}' not found."),
+                }
             }
         }
     }

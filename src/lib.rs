@@ -11,15 +11,15 @@ use teloxide::{
     types::{ChatId, InputFile, MessageId, ParseMode as TeloxideParseMode},
 };
 
-use crate::config::Config;
+use crate::config::{ConfigFile, config_path};
 
 mod config;
 mod secret_store;
 
 #[derive(Debug)]
 pub enum SendMessageError {
-    MissingToken,
-    MissingChatId,
+    MissingToken(Option<String>),
+    MissingChatId(Option<String>),
     RuntimeInit(io::Error),
     Request(RequestError),
 }
@@ -27,11 +27,23 @@ pub enum SendMessageError {
 impl std::fmt::Display for SendMessageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SendMessageError::MissingToken => {
+            SendMessageError::MissingToken(None) => {
                 write!(f, "No token configured. Run `tg setup` first.")
             }
-            SendMessageError::MissingChatId => {
+            SendMessageError::MissingToken(Some(profile)) => {
+                write!(
+                    f,
+                    "No token configured for profile '{profile}'. Run `tg --profile {profile} setup` first."
+                )
+            }
+            SendMessageError::MissingChatId(None) => {
                 write!(f, "No chat ID configured. Run `tg setup` first.")
+            }
+            SendMessageError::MissingChatId(Some(profile)) => {
+                write!(
+                    f,
+                    "No chat ID configured for profile '{profile}'. Run `tg --profile {profile} setup` first."
+                )
             }
             SendMessageError::RuntimeInit(err) => {
                 write!(f, "Failed to initialize async runtime: {err}")
@@ -46,7 +58,7 @@ impl std::error::Error for SendMessageError {
         match self {
             SendMessageError::RuntimeInit(err) => Some(err),
             SendMessageError::Request(err) => Some(err),
-            SendMessageError::MissingToken | SendMessageError::MissingChatId => None,
+            SendMessageError::MissingToken(_) | SendMessageError::MissingChatId(_) => None,
         }
     }
 }
@@ -99,13 +111,16 @@ impl From<ParseMode> for TeloxideParseMode {
 }
 
 impl TgSession {
-    pub async fn from_config() -> TgResult<Self> {
-        let config = Config::load();
-        let token = config
-            .resolved_token()
+    pub async fn from_config(profile: Option<&str>) -> TgResult<Self> {
+        let file = ConfigFile::load();
+        let profile_data = file.get_profile(profile);
+        let token = profile_data
+            .resolved_token_for(profile)
             .await
-            .ok_or(SendMessageError::MissingToken)?;
-        let chat_id = config.chat_id.ok_or(SendMessageError::MissingChatId)?;
+            .ok_or_else(|| SendMessageError::MissingToken(profile.map(|s| s.to_string())))?;
+        let chat_id = profile_data
+            .chat_id
+            .ok_or_else(|| SendMessageError::MissingChatId(profile.map(|s| s.to_string())))?;
 
         Ok(Self {
             bot: Bot::new(token),
@@ -183,95 +198,112 @@ impl TgSession {
     }
 }
 
-pub async fn load_setup_status() -> SetupStatus {
-    let config = Config::load();
+pub async fn load_setup_status(profile: Option<&str>) -> SetupStatus {
+    let file = ConfigFile::load();
+    let profile_data = file.get_profile(profile);
     SetupStatus {
-        has_token: config.resolved_token().await.is_some(),
-        chat_id: config.chat_id,
+        has_token: profile_data.resolved_token_for(profile).await.is_some(),
+        chat_id: profile_data.chat_id,
     }
 }
 
-pub async fn bot_from_config_token() -> TgResult<Bot> {
-    let config = Config::load();
-    let token = config
-        .resolved_token()
+pub async fn bot_from_config_token(profile: Option<&str>) -> TgResult<Bot> {
+    let file = ConfigFile::load();
+    let profile_data = file.get_profile(profile);
+    let token = profile_data
+        .resolved_token_for(profile)
         .await
-        .ok_or(SendMessageError::MissingToken)?;
+        .ok_or_else(|| SendMessageError::MissingToken(profile.map(|s| s.to_string())))?;
     Ok(Bot::new(token))
 }
 
-pub async fn listen_config() -> TgResult<(Bot, ChatId)> {
-    let bot = bot_from_config_token().await?;
-    let chat_id = Config::load()
+pub async fn listen_config(profile: Option<&str>) -> TgResult<(Bot, ChatId)> {
+    let bot = bot_from_config_token(profile).await?;
+    let file = ConfigFile::load();
+    let chat_id = file
+        .get_profile(profile)
         .chat_id
-        .ok_or(SendMessageError::MissingChatId)?;
+        .ok_or_else(|| SendMessageError::MissingChatId(profile.map(|s| s.to_string())))?;
     Ok((bot, ChatId(chat_id)))
 }
 
-pub async fn inspect_bot_config() -> BotConfigStatus {
-    let path = config::config_path();
-    let config = Config::load();
+pub async fn inspect_bot_config(profile: Option<&str>) -> BotConfigStatus {
+    let path = config_path();
+    let file = ConfigFile::load();
+    let profile_data = file.get_profile(profile);
 
-    let (secret_service, token) = match secret_store::load_token().await {
-        Ok(Some(_)) => (SecretServiceStatus::Available, TokenStatus::SecretService),
-        Ok(None) => (
-            SecretServiceStatus::Available,
-            if config.token.is_some() {
-                TokenStatus::PlaintextFallback
-            } else {
-                TokenStatus::NotConfigured
-            },
-        ),
-        Err(err) if secret_store::is_unavailable(&err) => (
-            SecretServiceStatus::Unavailable,
-            if config.token.is_some() {
-                TokenStatus::PlaintextFallback
-            } else {
-                TokenStatus::NotConfigured
-            },
-        ),
-        Err(err) => (
-            SecretServiceStatus::Error(err.to_string()),
-            if config.token.is_some() {
-                TokenStatus::PlaintextFallback
-            } else {
-                TokenStatus::NotConfigured
-            },
-        ),
-    };
+    let (secret_service, token) =
+        match secret_store::load_token_for(profile.map(|s| s.to_string())).await {
+            Ok(Some(_)) => (SecretServiceStatus::Available, TokenStatus::SecretService),
+            Ok(None) => (
+                SecretServiceStatus::Available,
+                if profile_data.token.is_some() {
+                    TokenStatus::PlaintextFallback
+                } else {
+                    TokenStatus::NotConfigured
+                },
+            ),
+            Err(err) if secret_store::is_unavailable(&err) => (
+                SecretServiceStatus::Unavailable,
+                if profile_data.token.is_some() {
+                    TokenStatus::PlaintextFallback
+                } else {
+                    TokenStatus::NotConfigured
+                },
+            ),
+            Err(err) => (
+                SecretServiceStatus::Error(err.to_string()),
+                if profile_data.token.is_some() {
+                    TokenStatus::PlaintextFallback
+                } else {
+                    TokenStatus::NotConfigured
+                },
+            ),
+        };
 
     BotConfigStatus {
         config_file_present: path.exists(),
         path,
-        chat_id: config.chat_id,
+        chat_id: profile_data.chat_id,
         token,
         secret_service,
     }
 }
 
-pub async fn save_bot_config(token: &str, chat_id: i64) {
-    let mut config = Config::load();
-    let _ = config.persist_token(token).await;
-    config.chat_id = Some(chat_id);
-    config.save();
+pub async fn save_bot_config(token: &str, chat_id: i64, profile: Option<&str>) {
+    let mut file = ConfigFile::load();
+    let mut profile_data = file.get_profile(profile);
+    let _ = profile_data.persist_token_for(token, profile).await;
+    profile_data.chat_id = Some(chat_id);
+    file.set_profile(profile, profile_data);
+    file.save();
 }
 
-pub fn save_chat_id(chat_id: i64) {
-    let mut config = Config::load();
-    config.chat_id = Some(chat_id);
-    config.save();
+pub fn save_chat_id(chat_id: i64, profile: Option<&str>) {
+    let mut file = ConfigFile::load();
+    let mut profile_data = file.get_profile(profile);
+    profile_data.chat_id = Some(chat_id);
+    file.set_profile(profile, profile_data);
+    file.save();
 }
 
-pub async fn delete_bot_config() -> bool {
-    let path = config::config_path();
-    let mut removed_any = false;
+pub async fn delete_bot_config(profile: Option<&str>) -> bool {
+    let path = config_path();
+    let mut file = ConfigFile::load();
+    let had_data = file.get_profile(profile).chat_id.is_some();
+    file.delete_profile(profile);
 
-    if path.exists() {
-        fs::remove_file(&path).expect("failed to delete config");
-        removed_any = true;
+    if file.is_empty() {
+        if path.exists() {
+            fs::remove_file(&path).expect("failed to delete config");
+        }
+    } else {
+        file.save();
     }
 
-    match secret_store::delete_token().await {
+    let mut removed_any = had_data;
+
+    match secret_store::delete_token_for(profile.map(|s| s.to_string())).await {
         Ok(()) => {
             removed_any = true;
         }
@@ -288,20 +320,36 @@ pub async fn delete_bot_config() -> bool {
     removed_any
 }
 
-pub async fn send_tg_message(text: String, parse_mode: ParseMode, silent: bool) -> TgResult<()> {
-    let session = TgSession::from_config().await?;
+pub async fn send_tg_message(
+    text: String,
+    parse_mode: ParseMode,
+    silent: bool,
+    profile: Option<&str>,
+) -> TgResult<()> {
+    let session = TgSession::from_config(profile).await?;
     session.send_message(text, parse_mode, silent).await?;
     Ok(())
 }
 
-pub fn send_tg_message_blocking(text: String, parse_mode: ParseMode, silent: bool) -> TgResult<()> {
+pub fn send_tg_message_blocking(
+    text: String,
+    parse_mode: ParseMode,
+    silent: bool,
+    profile: Option<&str>,
+) -> TgResult<()> {
+    let profile_owned = profile.map(|s| s.to_string());
     if tokio::runtime::Handle::try_current().is_ok() {
         let worker = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(SendMessageError::RuntimeInit)?;
-            rt.block_on(send_tg_message(text, parse_mode, silent))
+            rt.block_on(send_tg_message(
+                text,
+                parse_mode,
+                silent,
+                profile_owned.as_deref(),
+            ))
         });
 
         return match worker.join() {
@@ -316,7 +364,12 @@ pub fn send_tg_message_blocking(text: String, parse_mode: ParseMode, silent: boo
         .enable_all()
         .build()
         .map_err(SendMessageError::RuntimeInit)?;
-    rt.block_on(send_tg_message(text, parse_mode, silent))
+    rt.block_on(send_tg_message(
+        text,
+        parse_mode,
+        silent,
+        profile_owned.as_deref(),
+    ))
 }
 
 #[cfg(feature = "non-blocking")]
@@ -327,12 +380,16 @@ macro_rules! telegram {
     }};
     ($($arg:tt)*) => {{
         let msg = format!($($arg)*);
+        let profile = std::env::var("TG_PROFILE").ok();
         tokio::spawn(async move {
             if let Err(err) = $crate::send_tg_message(
                 msg,
                 $crate::ParseMode::Markdown,
                 false,
-            ).await {
+                profile.as_deref(),
+            )
+            .await
+            {
                 eprintln!("{err}");
             }
         });
@@ -346,10 +403,12 @@ macro_rules! telegram {
         $crate::telegram!("")
     }};
     ($($arg:tt)*) => {{
+        let profile = std::env::var("TG_PROFILE").ok();
         if let Err(err) = $crate::send_tg_message_blocking(
             format!($($arg)*),
             $crate::ParseMode::Markdown,
             false,
+            profile.as_deref(),
         ) {
             eprintln!("{err}");
         }

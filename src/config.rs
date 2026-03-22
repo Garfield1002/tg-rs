@@ -1,13 +1,26 @@
-use std::{fs, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::secret_store;
 
-#[derive(Serialize, Deserialize, Default)]
-pub(crate) struct Config {
+#[derive(Serialize, Deserialize, Default, Clone)]
+pub(crate) struct ProfileConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) chat_id: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub(crate) struct ConfigFile {
+    // Default profile fields at the top level for backward compatibility
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) chat_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub(crate) profiles: HashMap<String, ProfileConfig>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,13 +39,11 @@ pub(crate) fn config_path() -> PathBuf {
         .join("config.toml")
 }
 
-impl Config {
-    // Reads a config from the config file, or returns an empty config if the file doesn't exist.
+impl ConfigFile {
     pub(crate) fn load() -> Self {
         Self::load_from_path(&config_path())
     }
 
-    /// Saves the config to the config file, creating parent directories if necessary.
     pub(crate) fn save(&self) {
         let path = config_path();
         if let Some(parent) = path.parent() {
@@ -42,23 +53,42 @@ impl Config {
         fs::write(&path, contents).expect("failed to write config");
     }
 
-    /// Resolve the token from Secret Service first, then fallback to plaintext config.
-    pub(crate) async fn resolved_token(&self) -> Option<String> {
-        let path = config_path();
-        self.resolved_token_with(secret_store::load_token, |message| eprintln!("{message}"), &path)
-            .await
+    pub(crate) fn get_profile(&self, profile: Option<&str>) -> ProfileConfig {
+        match profile {
+            None => ProfileConfig {
+                token: self.token.clone(),
+                chat_id: self.chat_id,
+            },
+            Some(name) => self.profiles.get(name).cloned().unwrap_or_default(),
+        }
     }
 
-    /// Save token to Secret Service first, then fallback to plaintext config on failure.
-    pub(crate) async fn persist_token(&mut self, token: &str) -> TokenPersistence {
-        let path = config_path();
-        self.persist_token_with(
-            token,
-            secret_store::save_token,
-            |message| eprintln!("{message}"),
-            &path,
-        )
-        .await
+    pub(crate) fn set_profile(&mut self, profile: Option<&str>, data: ProfileConfig) {
+        match profile {
+            None => {
+                self.token = data.token;
+                self.chat_id = data.chat_id;
+            }
+            Some(name) => {
+                self.profiles.insert(name.to_string(), data);
+            }
+        }
+    }
+
+    pub(crate) fn delete_profile(&mut self, profile: Option<&str>) {
+        match profile {
+            None => {
+                self.token = None;
+                self.chat_id = None;
+            }
+            Some(name) => {
+                self.profiles.remove(name);
+            }
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.token.is_none() && self.chat_id.is_none() && self.profiles.is_empty()
     }
 
     fn load_from_path(path: &std::path::Path) -> Self {
@@ -66,8 +96,37 @@ impl Config {
             let contents = fs::read_to_string(path).unwrap_or_default();
             toml::from_str(&contents).unwrap_or_default()
         } else {
-            Config::default()
+            ConfigFile::default()
         }
+    }
+}
+
+impl ProfileConfig {
+    pub(crate) async fn resolved_token_for(&self, profile: Option<&str>) -> Option<String> {
+        let path = config_path();
+        let profile_owned = profile.map(|s| s.to_string());
+        self.resolved_token_with(
+            || secret_store::load_token_for(profile_owned),
+            |message| eprintln!("{message}"),
+            &path,
+        )
+        .await
+    }
+
+    pub(crate) async fn persist_token_for(
+        &mut self,
+        token: &str,
+        profile: Option<&str>,
+    ) -> TokenPersistence {
+        let path = config_path();
+        let profile_owned = profile.map(|s| s.to_string());
+        self.persist_token_with(
+            token,
+            |t| secret_store::save_token_for(profile_owned, t),
+            |message| eprintln!("{message}"),
+            &path,
+        )
+        .await
     }
 
     async fn resolved_token_with<F, Fut, W>(
@@ -147,14 +206,15 @@ mod tests {
 
     use crate::secret_store::SecretStoreError;
 
-    use super::{Config, TokenPersistence};
+    use super::{ConfigFile, ProfileConfig, TokenPersistence};
 
     #[test]
     fn load_from_path_returns_default_when_missing() {
         let missing = unique_tmp_path("missing-config");
-        let config = Config::load_from_path(&missing);
+        let config = ConfigFile::load_from_path(&missing);
         assert!(config.token.is_none());
         assert!(config.chat_id.is_none());
+        assert!(config.profiles.is_empty());
     }
 
     #[test]
@@ -163,22 +223,38 @@ mod tests {
         std::fs::write(&path, "token = \"plaintext-token\"\nchat_id = 123456\n")
             .expect("failed to write temporary config");
 
-        let config = Config::load_from_path(&path);
+        let config = ConfigFile::load_from_path(&path);
         assert_eq!(config.token.as_deref(), Some("plaintext-token"));
         assert_eq!(config.chat_id, Some(123456));
 
         let _ = std::fs::remove_file(path);
     }
 
+    #[test]
+    fn load_from_path_parses_named_profiles() {
+        let path = unique_tmp_path("profiles-config");
+        std::fs::write(
+            &path,
+            "chat_id = 111\n\n[profiles.work]\nchat_id = 222\n",
+        )
+        .expect("failed to write temporary config");
+
+        let config = ConfigFile::load_from_path(&path);
+        assert_eq!(config.chat_id, Some(111));
+        assert_eq!(config.profiles["work"].chat_id, Some(222));
+
+        let _ = std::fs::remove_file(path);
+    }
+
     #[tokio::test]
     async fn resolved_token_prefers_secret_service_value() {
-        let config = Config {
+        let profile = ProfileConfig {
             token: Some("plaintext-token".to_string()),
             chat_id: None,
         };
 
         let mut warnings = Vec::<String>::new();
-        let token = config
+        let token = profile
             .resolved_token_with(
                 || async { Ok(Some("secret-service-token".to_string())) },
                 |warning| warnings.push(warning),
@@ -192,13 +268,13 @@ mod tests {
 
     #[tokio::test]
     async fn resolved_token_falls_back_to_plaintext_when_secret_missing() {
-        let config = Config {
+        let profile = ProfileConfig {
             token: Some("plaintext-token".to_string()),
             chat_id: None,
         };
 
         let mut warnings = Vec::<String>::new();
-        let token = config
+        let token = profile
             .resolved_token_with(
                 || async { Ok(None) },
                 |warning| warnings.push(warning),
@@ -212,13 +288,13 @@ mod tests {
 
     #[tokio::test]
     async fn resolved_token_warns_and_falls_back_when_secret_service_unavailable() {
-        let config = Config {
+        let profile = ProfileConfig {
             token: Some("plaintext-token".to_string()),
             chat_id: None,
         };
 
         let mut warnings = Vec::<String>::new();
-        let token = config
+        let token = profile
             .resolved_token_with(
                 || async {
                     Err(SecretStoreError::Unavailable(
@@ -240,13 +316,13 @@ mod tests {
 
     #[tokio::test]
     async fn resolved_token_warns_and_falls_back_on_other_secret_errors() {
-        let config = Config {
+        let profile = ProfileConfig {
             token: Some("plaintext-token".to_string()),
             chat_id: None,
         };
 
         let mut warnings = Vec::<String>::new();
-        let token = config
+        let token = profile
             .resolved_token_with(
                 || async { Err(SecretStoreError::Backend(keyring::Error::NoEntry)) },
                 |warning| warnings.push(warning),
@@ -264,10 +340,10 @@ mod tests {
 
     #[tokio::test]
     async fn persist_token_uses_secret_service_when_available() {
-        let mut config = Config::default();
+        let mut profile = ProfileConfig::default();
         let mut warnings = Vec::<String>::new();
 
-        let persistence = config
+        let persistence = profile
             .persist_token_with(
                 "secret-service-token",
                 |_| async { Ok(()) },
@@ -277,16 +353,16 @@ mod tests {
             .await;
 
         assert_eq!(persistence, TokenPersistence::SecretService);
-        assert!(config.token.is_none());
+        assert!(profile.token.is_none());
         assert!(warnings.is_empty());
     }
 
     #[tokio::test]
     async fn persist_token_warns_and_falls_back_when_secret_service_unavailable() {
-        let mut config = Config::default();
+        let mut profile = ProfileConfig::default();
         let mut warnings = Vec::<String>::new();
 
-        let persistence = config
+        let persistence = profile
             .persist_token_with(
                 "plaintext-token",
                 |_| async {
@@ -300,7 +376,7 @@ mod tests {
             .await;
 
         assert_eq!(persistence, TokenPersistence::PlaintextFallback);
-        assert_eq!(config.token.as_deref(), Some("plaintext-token"));
+        assert_eq!(profile.token.as_deref(), Some("plaintext-token"));
         assert_eq!(warnings.len(), 1);
         assert!(
             warnings[0].contains("Secret Service API unavailable")
@@ -310,10 +386,10 @@ mod tests {
 
     #[tokio::test]
     async fn persist_token_warns_and_falls_back_on_other_secret_errors() {
-        let mut config = Config::default();
+        let mut profile = ProfileConfig::default();
         let mut warnings = Vec::<String>::new();
 
-        let persistence = config
+        let persistence = profile
             .persist_token_with(
                 "plaintext-token",
                 |_| async { Err(SecretStoreError::Backend(keyring::Error::NoEntry)) },
@@ -323,7 +399,7 @@ mod tests {
             .await;
 
         assert_eq!(persistence, TokenPersistence::PlaintextFallback);
-        assert_eq!(config.token.as_deref(), Some("plaintext-token"));
+        assert_eq!(profile.token.as_deref(), Some("plaintext-token"));
         assert_eq!(warnings.len(), 1);
         assert!(
             warnings[0].contains("failed to store token in Secret Service")
