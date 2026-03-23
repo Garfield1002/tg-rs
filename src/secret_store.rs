@@ -30,14 +30,66 @@ impl std::error::Error for SecretStoreError {
     }
 }
 
-pub(crate) async fn load_token() -> Result<Option<String>, SecretStoreError> {
-    tokio::task::spawn_blocking(|| load_token_from_entry(&token_entry()?))
-        .await
-        .unwrap_or_else(|_| {
-            Err(SecretStoreError::Unavailable(
-                "failed to access Secret Service from worker thread".to_string(),
-            ))
-        })
+fn token_username_for(profile: Option<&str>) -> String {
+    match profile {
+        None => TOKEN_USERNAME.to_string(),
+        Some(name) => format!("{TOKEN_USERNAME}-{name}"),
+    }
+}
+
+pub(crate) async fn load_token_for(
+    profile: Option<String>,
+) -> Result<Option<String>, SecretStoreError> {
+    let username = token_username_for(profile.as_deref());
+    tokio::task::spawn_blocking(move || {
+        let entry = Entry::new(SERVICE_NAME, &username)
+            .map_err(map_keyring_error)
+            .and_then(ensure_non_mock_backend)?;
+        load_token_from_entry(&entry)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(SecretStoreError::Unavailable(
+            "failed to access Secret Service from worker thread".to_string(),
+        ))
+    })
+}
+
+pub(crate) async fn save_token_for(
+    profile: Option<String>,
+    token: String,
+) -> Result<(), SecretStoreError> {
+    let username = token_username_for(profile.as_deref());
+    tokio::task::spawn_blocking(move || {
+        let entry = Entry::new(SERVICE_NAME, &username)
+            .map_err(map_keyring_error)
+            .and_then(ensure_non_mock_backend)?;
+        save_token_to_entry(&entry, &token)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(SecretStoreError::Unavailable(
+            "failed to access Secret Service from worker thread".to_string(),
+        ))
+    })
+}
+
+pub(crate) async fn delete_token_for(
+    profile: Option<String>,
+) -> Result<(), SecretStoreError> {
+    let username = token_username_for(profile.as_deref());
+    tokio::task::spawn_blocking(move || {
+        let entry = Entry::new(SERVICE_NAME, &username)
+            .map_err(map_keyring_error)
+            .and_then(ensure_non_mock_backend)?;
+        delete_token_from_entry(&entry)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        Err(SecretStoreError::Unavailable(
+            "failed to access Secret Service from worker thread".to_string(),
+        ))
+    })
 }
 
 fn load_token_from_entry(entry: &Entry) -> Result<Option<String>, SecretStoreError> {
@@ -54,28 +106,8 @@ fn load_token_from_entry(entry: &Entry) -> Result<Option<String>, SecretStoreErr
     }
 }
 
-pub(crate) async fn save_token(token: String) -> Result<(), SecretStoreError> {
-    tokio::task::spawn_blocking(move || save_token_to_entry(&token_entry()?, &token))
-        .await
-        .unwrap_or_else(|_| {
-            Err(SecretStoreError::Unavailable(
-                "failed to access Secret Service from worker thread".to_string(),
-            ))
-        })
-}
-
 fn save_token_to_entry(entry: &Entry, token: &str) -> Result<(), SecretStoreError> {
     entry.set_password(token).map_err(map_keyring_error)
-}
-
-pub(crate) async fn delete_token() -> Result<(), SecretStoreError> {
-    tokio::task::spawn_blocking(|| delete_token_from_entry(&token_entry()?))
-        .await
-        .unwrap_or_else(|_| {
-            Err(SecretStoreError::Unavailable(
-                "failed to access Secret Service from worker thread".to_string(),
-            ))
-        })
 }
 
 fn delete_token_from_entry(entry: &Entry) -> Result<(), SecretStoreError> {
@@ -89,7 +121,6 @@ fn map_delete_result(result: Result<(), keyring::Error>) -> Result<(), SecretSto
         Err(err) => Err(map_keyring_error(err)),
     }
 }
-
 
 fn ensure_non_mock_backend(entry: Entry) -> Result<Entry, SecretStoreError> {
     match entry
@@ -106,12 +137,6 @@ fn ensure_non_mock_backend(entry: Entry) -> Result<Entry, SecretStoreError> {
 
 pub(crate) fn is_unavailable(err: &SecretStoreError) -> bool {
     matches!(err, SecretStoreError::Unavailable(_))
-}
-
-fn token_entry() -> Result<Entry, SecretStoreError> {
-    Entry::new(SERVICE_NAME, TOKEN_USERNAME)
-        .map_err(map_keyring_error)
-        .and_then(ensure_non_mock_backend)
 }
 
 fn map_keyring_error(err: keyring::Error) -> SecretStoreError {

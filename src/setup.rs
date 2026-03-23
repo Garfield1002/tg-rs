@@ -11,19 +11,33 @@ use teloxide::{
 use tg_cli::{bot_from_config_token, load_setup_status, save_bot_config, save_chat_id};
 
 /// Setup wizard for first-time users
-pub(crate) async fn run_setup() {
-    let config = load_setup_status().await;
+pub(crate) async fn run_setup(profile: Option<&str>) {
+    let config = load_setup_status(profile).await;
 
     if config.chat_id.is_some() {
-        eprintln!("Already configured. Run `tg config reset` to reconfigure.");
+        match profile {
+            None => eprintln!("Already configured. Run `tg config reset` to reconfigure."),
+            Some(name) => eprintln!(
+                "Profile '{name}' already configured. Run `tg --profile {name} config reset` to reconfigure."
+            ),
+        }
         std::process::exit(1);
+    }
+
+    if let Some(name) = profile {
+        eprintln!("Setting up profile: {name}\n");
     }
 
     eprintln!("Step 1 of 3 — Bot token\n\n");
     let (bot, token) = if config.has_token {
-        eprintln!("Bot token already configured. Run `tg config reset` to reconfigure.");
+        match profile {
+            None => eprintln!("Bot token already configured. Run `tg config reset` to reconfigure."),
+            Some(name) => eprintln!(
+                "Bot token already configured. Run `tg --profile {name} config reset` to reconfigure."
+            ),
+        }
         (
-            bot_from_config_token()
+            bot_from_config_token(profile)
                 .await
                 .expect("token reported configured but could not be loaded"),
             None,
@@ -47,12 +61,17 @@ pub(crate) async fn run_setup() {
     verify_code(&code).await;
 
     if let Some(token) = token {
-        save_bot_config(&token, chat_id).await;
+        save_bot_config(&token, chat_id, profile).await;
     } else {
-        save_chat_id(chat_id);
+        save_chat_id(chat_id, profile);
     }
 
-    eprintln!("\nAll done! Try it out:\n\n  tg \"Hello, World!\"");
+    match profile {
+        None => eprintln!("\nAll done! Try it out:\n\n  tg \"Hello, World!\""),
+        Some(name) => {
+            eprintln!("\nAll done! Try it out:\n\n  tg --profile {name} \"Hello, World!\"")
+        }
+    }
     std::process::exit(0);
 }
 

@@ -58,6 +58,7 @@ If no message args are given, `tg` reads from stdin until EOF.
 
 | Flag      | Long                              | Description                                           |
 | --------- | --------------------------------- | ----------------------------------------------------- |
+| `-p NAME` | `--profile NAME`                  | Profile to use (overrides `TG_PROFILE` env var)       |
 | `-e`      |                                   | Interpret escape sequences (`\n`, `\t`, `\\`)         |
 | `-n`      |                                   | Strip trailing newline from input                     |
 | `-m MODE` | `--parse-mode MODE`               | Telegram formatting: `markdown` or `html`             |
@@ -132,6 +133,38 @@ for i in $(seq 0 20); do
 done | tg -i
 ```
 
+### Profiles (`-p` / `--profile`)
+
+Profiles let you send to different bots or chats without changing your default config.
+
+```sh
+# Set up a named profile
+tg setup --profile work
+tg setup --profile personal
+
+# Send using a profile
+tg --profile work "deploy finished"
+tg -p personal "weekend plans"
+
+# Select a profile via environment variable
+TG_PROFILE=work tg "staging is up"
+export TG_PROFILE=work
+tg "this goes to work too"
+
+# Profile-specific subcommands
+tg -p work config show
+tg -p work config reset
+tg -p work attach report.pdf
+tg -p work listen
+```
+
+`--profile` is a global flag accepted before or after the subcommand:
+
+```sh
+tg --profile work config reset
+tg config reset --profile work   # equivalent
+```
+
 ### Attach files (`tg attach`)
 
 Send one or more files as Telegram document attachments. Shell globbing works as expected.
@@ -188,7 +221,7 @@ tg attach -q data.csv         # quiet (no "Sent:" output)
 
 ### `tg config show`
 
-Print configuration status without revealing secrets:
+Print configuration status without revealing secrets. When called without `--profile`, also lists all named profiles:
 
 ```sh
 tg config show
@@ -197,33 +230,53 @@ tg config show
 # Chat ID: 123456789
 # Secret Service: available
 # Token: configured (Secret Service)
+#
+# Available profiles:
+#   personal: Chat ID: 111222333, Token: configured (Secret Service)
+#   work: Chat ID: 987654321, Token: configured (Secret Service)
+
+# Inspect a specific profile
+tg --profile work config show
+# Profile: work
+# Config path: /home/user/.config/tg/config.toml
+# ...
 ```
 
 ### `tg config reset`
 
-Delete local config and keyring token so you can run setup again:
+Delete the config and keyring token for a profile so you can run setup again. Without `--profile`, resets the default:
 
 ```sh
 tg config reset
 tg setup
+
+# Reset a named profile only (other profiles are unaffected)
+tg --profile work config reset
+tg --profile work setup
 ```
 
 ## Configuration
 
-`tg` stores the bot token in Secret Service (GNOME Keyring / KWallet) when available.
+`tg` stores bot tokens in Secret Service (GNOME Keyring / KWallet) when available.
 If unavailable, it falls back to plaintext in `~/.config/tg/config.toml` and prints a warning.
 
-The config file always stores `chat_id` and may include a fallback token:
+All profiles share a single config file. The default profile lives at the top level; named profiles are under `[profiles.<name>]`:
 
 ```toml
+# Default profile
 chat_id = 123456789
+# token = "..."   # plaintext fallback only
 
-# fallback only when Secret Service is unavailable
-token = "123456:ABC-your-token-here"
+[profiles.work]
+chat_id = 987654321
+
+[profiles.personal]
+chat_id = 111222333
 ```
 
-`chat_id` is always written during `tg setup`.
-To change either value, run `tg config reset` and go through setup again.
+Keyring entries follow the same pattern — `"telegram-bot-token"` for the default, `"telegram-bot-token-<name>"` for named profiles.
+
+To reconfigure a profile, run `tg [--profile NAME] config reset` then `tg [--profile NAME] setup`.
 
 ## Examples
 
@@ -261,7 +314,8 @@ Notes:
 - Non-blocking behavior is controlled by the `non-blocking` feature.
 - If `non-blocking` is disabled, `telegram!` uses a blocking send path.
 - Send failures are printed to stderr.
-- For explicit error handling or custom parse/silent options, use `send_tg_message(...)` directly.
+- The macro reads `TG_PROFILE` at runtime to select a profile.
+- For explicit error handling or custom parse/silent/profile options, use `send_tg_message(...)` directly.
 
 ### Blocking API
 
@@ -271,7 +325,7 @@ If you want a synchronous API, call `send_tg_message_blocking(...)`:
 use tg_cli::{ParseMode, send_tg_message_blocking};
 
 fn main() {
-    if let Err(err) = send_tg_message_blocking("hello".to_string(), ParseMode::Markdown, false) {
+    if let Err(err) = send_tg_message_blocking("hello".to_string(), ParseMode::Markdown, false, None) {
         eprintln!("{err}");
     }
 }
