@@ -48,7 +48,7 @@ impl std::fmt::Display for SendMessageError {
             SendMessageError::RuntimeInit(err) => {
                 write!(f, "Failed to initialize async runtime: {err}")
             }
-            SendMessageError::Request(err) => write!(f, "Failed to send message: {err}"),
+            SendMessageError::Request(err) => write!(f, "Telegram API request failed: {err}"),
         }
     }
 }
@@ -156,9 +156,27 @@ impl TgSession {
         parse_mode: ParseMode,
         silent: bool,
     ) -> TgResult<i32> {
-        let mut req = self
-            .bot
-            .send_message(self.chat_id, Self::sanitize_text(text));
+        self.send_message_inner(Self::sanitize_text(text), parse_mode, silent)
+            .await
+    }
+
+    /// Send text without escaping Markdown/HTML formatting markers.
+    pub async fn send_message_raw(
+        &self,
+        text: String,
+        parse_mode: ParseMode,
+        silent: bool,
+    ) -> TgResult<i32> {
+        self.send_message_inner(text, parse_mode, silent).await
+    }
+
+    async fn send_message_inner(
+        &self,
+        text: String,
+        parse_mode: ParseMode,
+        silent: bool,
+    ) -> TgResult<i32> {
+        let mut req = self.bot.send_message(self.chat_id, text);
         req = req.parse_mode(parse_mode.into());
 
         if silent {
@@ -333,8 +351,31 @@ pub async fn send_tg_message(
     silent: bool,
     profile: Option<&str>,
 ) -> TgResult<()> {
+    send_tg_message_with_escape(text, parse_mode, silent, profile, true).await
+}
+
+pub async fn send_tg_message_raw(
+    text: String,
+    parse_mode: ParseMode,
+    silent: bool,
+    profile: Option<&str>,
+) -> TgResult<()> {
+    send_tg_message_with_escape(text, parse_mode, silent, profile, false).await
+}
+
+async fn send_tg_message_with_escape(
+    text: String,
+    parse_mode: ParseMode,
+    silent: bool,
+    profile: Option<&str>,
+    escape: bool,
+) -> TgResult<()> {
     let session = TgSession::from_config(profile).await?;
-    session.send_message(text, parse_mode, silent).await?;
+    if escape {
+        session.send_message(text, parse_mode, silent).await?;
+    } else {
+        session.send_message_raw(text, parse_mode, silent).await?;
+    }
     Ok(())
 }
 

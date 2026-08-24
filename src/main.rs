@@ -5,10 +5,14 @@ use std::{
 
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
-use teloxide::{payloads::GetUpdatesSetters, prelude::Requester, types::UpdateKind};
+use teloxide::{
+    payloads::GetUpdatesSetters,
+    prelude::Requester,
+    types::{AllowedUpdate, ReactionType, UpdateKind},
+};
 use tg_cli::{
     BotConfigStatus, ParseMode, SecretServiceStatus, TgSession, TokenStatus, delete_bot_config,
-    inspect_bot_config, list_profile_names, listen_config, send_tg_message,
+    inspect_bot_config, list_profile_names, listen_config, send_tg_message, send_tg_message_raw,
 };
 
 use crate::setup::run_setup;
@@ -45,9 +49,17 @@ struct Cli {
     #[arg(short = 'q', long)]
     quiet: bool,
 
+    /// Preserve Markdown/HTML formatting instead of escaping it
+    #[arg(long)]
+    raw: bool,
+
     /// Send silently (no device notification)
     #[arg(short = 's', long)]
     silent: bool,
+
+    /// Emit listen events as one JSON object per line (for integrations)
+    #[arg(long, global = true)]
+    json: bool,
 
     /// Interactive mode: stream stdin updates and edit a single Telegram message (max 1 update/s)
     #[arg(short = 'i', long)]
@@ -164,7 +176,7 @@ async fn main() {
     match cli.command {
         Some(Command::Setup) => run_setup(profile.as_deref()).await,
         Some(Command::Listen) => {
-            if let Err(err) = run_listen(profile.as_deref()).await {
+            if let Err(err) = run_listen(profile.as_deref(), cli.json).await {
                 eprintln!("{}", err);
                 std::process::exit(1);
             }
@@ -216,57 +228,158 @@ async fn run_messgae(cli: Cli, profile: Option<&str>) {
         }
     };
 
-    if let Err(err) = send_tg_message(text, parse_mode, cli.silent, profile).await {
+    let result = if cli.raw {
+        send_tg_message_raw(text, parse_mode, cli.silent, profile).await
+    } else {
+        send_tg_message(text, parse_mode, cli.silent, profile).await
+    };
+    if let Err(err) = result {
         eprintln!("{}", err);
         std::process::exit(1);
     }
 }
 
-async fn run_listen(profile: Option<&str>) -> Result<(), tg_cli::SendMessageError> {
+async fn run_listen(
+    profile: Option<&str>,
+    json_output: bool,
+) -> Result<(), tg_cli::SendMessageError> {
     let (bot, target_chat) = listen_config(profile).await?;
 
     // Start from the next update so listen mode only captures new incoming messages.
-    let mut offset: i32 = match bot.get_updates().timeout(0).await {
-        Ok(existing) => existing
-            .iter()
-            .map(|u| i32::try_from(u.id.0).unwrap_or(i32::MAX).saturating_add(1))
-            .max()
-            .unwrap_or(0),
-        Err(err) => return Err(tg_cli::SendMessageError::Request(err)),
+    let allowed_updates = [AllowedUpdate::Message, AllowedUpdate::MessageReaction];
+
+    let mut offset: i32 = loop {
+        match bot
+            .get_updates()
+            .allowed_updates(allowed_updates)
+            .timeout(0)
+            .await
+        {
+            Ok(existing) => {
+                break existing
+                    .iter()
+                    .map(|u| i32::try_from(u.id.0).unwrap_or(i32::MAX).saturating_add(1))
+                    .max()
+                    .unwrap_or(0);
+            }
+            Err(err) => {
+                eprintln!("Telegram listener request failed: {err}; retrying in 5 seconds.");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
     };
 
     loop {
-        let updates = bot
+        let updates = match bot
             .get_updates()
+            .allowed_updates(allowed_updates)
             .offset(offset)
             .timeout(30)
             .await
-            .map_err(tg_cli::SendMessageError::Request)?;
+        {
+            Ok(updates) => updates,
+            Err(err) => {
+                eprintln!("Telegram listener request failed: {err}; retrying in 5 seconds.");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
 
         for update in updates {
             offset = i32::try_from(update.id.0)
                 .unwrap_or(i32::MAX)
                 .saturating_add(1);
 
-            let UpdateKind::Message(message) = update.kind else {
-                continue;
-            };
+            match update.kind {
+                UpdateKind::Message(message) => {
+                    if message.chat.id != target_chat {
+                        continue;
+                    }
 
-            if message.chat.id != target_chat {
-                continue;
+                    let Some(text) = message.text() else {
+                        continue;
+                    };
+
+                    if text.trim() == "/eof" {
+                        return Ok(());
+                    }
+
+                    let output = if let Some(original) =
+                        message.reply_to_message().and_then(|reply| reply.text())
+                    {
+                        let quoted = original
+                            .lines()
+                            .map(|line| format!("> {line}"))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        format!("{quoted}\n{text}")
+                    } else {
+                        text.to_string()
+                    };
+                    emit_listen_output(json_output, "message", output);
+                }
+                UpdateKind::MessageReaction(reaction) => {
+                    if reaction.chat.id != target_chat {
+                        continue;
+                    }
+
+                    let actor = reaction
+                        .user()
+                        .map(|user| {
+                            user.username.as_deref().map_or_else(
+                                || user.first_name.clone(),
+                                |username| format!("@{username}"),
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            reaction.actor.chat().map_or_else(
+                                || "anonymous user".to_string(),
+                                |chat| {
+                                    chat.title()
+                                        .map(str::to_string)
+                                        .unwrap_or_else(|| "anonymous chat".to_string())
+                                },
+                            )
+                        });
+                    let output = format!(
+                        "Reaction on message {} by {}: {} -> {}",
+                        reaction.message_id.0,
+                        actor,
+                        format_reactions(&reaction.old_reaction),
+                        format_reactions(&reaction.new_reaction),
+                    );
+                    emit_listen_output(json_output, "reaction", output);
+                }
+                _ => {}
             }
-
-            let Some(text) = message.text() else {
-                continue;
-            };
-
-            if text.trim() == "/eof" {
-                return Ok(());
-            }
-
-            println!("{}", text);
         }
     }
+}
+
+fn emit_listen_output(json_output: bool, kind: &str, text: String) {
+    if json_output {
+        println!("{}", serde_json::json!({ "type": kind, "text": text }));
+    } else {
+        println!("{text}");
+    }
+}
+
+fn format_reactions(reactions: &[ReactionType]) -> String {
+    if reactions.is_empty() {
+        return "none".to_string();
+    }
+
+    reactions
+        .iter()
+        .map(|reaction| match reaction {
+            ReactionType::Emoji { emoji } => emoji.clone(),
+            ReactionType::CustomEmoji { custom_emoji_id } => {
+                format!("custom:{custom_emoji_id}")
+            }
+            ReactionType::Paid => "paid".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn parse_mode_from_cli(raw: &str) -> ParseMode {
